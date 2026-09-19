@@ -561,7 +561,7 @@ def main():
         q=s.add_parser(cmd); q.add_argument('route',help='Exact model ID, alias, or null to clear'); q.add_argument('--variant',help='Save variant for this exact model route')
     q=s.add_parser('set-fallbacks'); q.add_argument('routes',nargs='*')
     q=s.add_parser('set-alias'); q.add_argument('name'); q.add_argument('route')
-    q=s.add_parser('run'); q.add_argument('--model'); q.add_argument('--task-file','--brief',dest='task_file'); q.add_argument('--timeout',type=int,default=1800)
+    q=s.add_parser('run'); q.add_argument('--model'); q.add_argument('--task-file','--brief',dest='task_file'); q.add_argument('--timeout',type=int,default=3600)
     q.add_argument('--explicit',action='store_true',help='User explicitly requested worker execution'); q.add_argument('--use-fallbacks',action='store_true'); q.add_argument('--log-dir',help='Opt-in private raw JSONL log directory'); q.add_argument('--variant'); q.add_argument('--allow-command',action='append',default=[],help='Exact task-authorized shell command, repeatable'); q.add_argument('--read-only',action='store_true'); q.add_argument('--no-fallback',action='store_true'); q.add_argument('--use-opencode-default',action='store_true')
     q.add_argument('--evidence-dir',help='Outside-repository evidence parent; defaults to worker config directory/reviews')
     q.add_argument('--fix-from',type=Path,help='Original Ultra Lite writer.json; one correction for a concrete Head-confirmed defect, using --brief')
