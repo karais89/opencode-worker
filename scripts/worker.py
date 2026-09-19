@@ -107,10 +107,26 @@ def invoke(args, cwd=None, timeout=60, prompt=None, env=None):
         raise Failure('interrupted', 'Worker stopped; inspect repository before retry. No automatic fallback.')
     return p.returncode, out, err
 
+def discovery_failure(returncode, stderr):
+    """Expose only fixed diagnostic categories, never CLI text, paths or credentials."""
+    diagnostic = stderr[:8192].lower()
+    if 'filesystem.open' in diagnostic and re.search(r'opencode[/\\]log[/\\]', diagnostic):
+        cause = 'OpenCode log file could not be opened; check host filesystem permissions.'
+    elif re.search(r'permission denied|operation not permitted|\beacces\b|\beperm\b', diagnostic):
+        cause = 'OpenCode filesystem access was denied; check host filesystem permissions.'
+    elif re.search(r'\benotfound\b|\beconnrefused\b|\betimedout\b|fetch failed', diagnostic):
+        cause = 'OpenCode reported a network connection failure.'
+    elif re.search(r'providerautherror|authentication failed|unauthorized|invalid api key', diagnostic):
+        cause = 'OpenCode reported an authentication failure.'
+    else:
+        cause = 'OpenCode model discovery failed; no recognized safe diagnostic. Inspect OpenCode locally.'
+    return Failure('discovery_failed', f'{cause} (exit {returncode})')
+
+
 def models(cwd):
-    rc, out, _ = invoke(['models'], cwd)
+    rc, out, err = invoke(['models'], cwd)
     if rc:
-        raise Failure('discovery_failed', 'opencode models failed; check OpenCode auth, network and filesystem access.')
+        raise discovery_failure(rc, err)
     return sorted(set(x.strip() for x in out.splitlines() if re.fullmatch(r'[^\s/]+/[^\s]+', x.strip())))
 
 def load(path):
@@ -185,8 +201,8 @@ def route_id(route,d):
 
 def validate_variant(route,variant,root):
     if variant is None: return
-    rc,out,_=invoke(['models',route.split('/')[0],'--verbose'],root)
-    if rc: raise Failure('discovery_failed','Cannot validate reasoning variant.')
+    rc,out,err=invoke(['models',route.split('/')[0],'--verbose'],root)
+    if rc: raise discovery_failure(rc, err)
     # Verbose CLI emits an exact route line followed by a JSON object.
     lines=out.splitlines(keepends=True)
     for i,line in enumerate(lines):

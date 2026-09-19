@@ -29,6 +29,23 @@ def task_text(goal='Implement the requested behavior', **over):
     return json.dumps(brief)
 
 class Tests(unittest.TestCase):
+    def test_discovery_log_open_failure_is_safe_and_not_retried(self):
+        # Actual restricted-host failure, with private path/credential-shaped noise.
+        stderr = "\x1b[91mError: Unexpected error\x1b[0m\nUnknown: FileSystem.open (/Users/private/.local/share/opencode/log/opencode.log)\nAuthorization: Bearer PRIVATE_TOKEN"
+        for call in (lambda: w.models('/tmp'),
+                     lambda: w.validate_variant('provider/model', 'max', '/tmp')):
+            with self.subTest(call=call), patch.object(w, 'invoke', return_value=(1, '', stderr)) as invoke:
+                with self.assertRaises(w.Failure) as raised:
+                    call()
+                self.assertEqual(raised.exception.code, 'discovery_failed')
+                self.assertIn('log file could not be opened', str(raised.exception))
+                self.assertIn('exit 1', str(raised.exception))
+                self.assertNotIn('/Users/', str(raised.exception))
+                self.assertNotIn('PRIVATE_TOKEN', str(raised.exception))
+                invoke.assert_called_once()
+        # Unknown stderr is not echoed as a fallback.
+        self.assertNotIn('PRIVATE_TOKEN', str(w.discovery_failure(1, 'PRIVATE_TOKEN')))
+
     def test_config_isolation_and_environment(self):
         with tempfile.TemporaryDirectory() as t:
             a=w.load(Path(t)/'missing');b=w.load(Path(t)/'missing')
