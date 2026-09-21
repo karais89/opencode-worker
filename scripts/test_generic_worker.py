@@ -189,7 +189,7 @@ class ProgressTelemetryTests(unittest.TestCase):
                 {'type':'tool_use','sessionID':'s','part':{'tool':'edit','callID':'e2','state':{'status':'completed','input':{'filePath':secret_path}}}},
                 {'type':'step_finish','sessionID':'s','part':{'id':'done','reason':'stop','tokens':{'input':1,'output':1,'total':2}}},
             ]
-            exe.write_text('#!/usr/bin/env python3\\nimport json\\nevents='+repr(events)+'\\nfor event in events: print(json.dumps(event), flush=True)\\n')
+            exe.write_text('#!/usr/bin/env python3\nimport json\nevents='+repr(events)+'\nfor event in events: print(json.dumps(event), flush=True)\n')
             exe.chmod(0o700)
             env={**os.environ,'PATH':t+os.pathsep+os.environ['PATH']}
             progress=io.StringIO()
@@ -207,7 +207,7 @@ class ProgressTelemetryTests(unittest.TestCase):
     def test_progress_heartbeat_reports_silence_without_claiming_success(self):
         with tempfile.TemporaryDirectory() as t:
             exe=Path(t)/'opencode'
-            exe.write_text('#!/usr/bin/env python3\\nimport time\\ntime.sleep(0.12)\\n')
+            exe.write_text('#!/usr/bin/env python3\nimport time\ntime.sleep(0.12)\n')
             exe.chmod(0o700)
             env={**os.environ,'PATH':t+os.pathsep+os.environ['PATH']}
             progress=io.StringIO()
