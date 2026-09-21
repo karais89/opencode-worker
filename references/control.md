@@ -40,7 +40,7 @@ brief는 목표·제약·완료 조건만 짧게(최대 8 KiB) 작성합니다. 
 
 ## 실행 중 진행 텔레메트리
 
-`streaming.py`는 OpenCode JSONL을 소비하면서 기존 증거 수집과 동시에 작은 상태만 stderr에 출력합니다. stdout의 최종 구조화 결과 형식은 바꾸지 않습니다. 기본 heartbeat는 30초이며 단계가 바뀌면 즉시 한 줄을 출력합니다.
+`streaming.py`는 OpenCode JSONL을 소비하면서 기존 증거 수집과 동시에 작은 상태만 stderr에 출력합니다. stdout의 최종 구조화 결과 형식은 바꾸지 않습니다. 기본 heartbeat는 60초이며 단계가 바뀌면 즉시 한 줄을 출력합니다. 따라서 정상적인 단계 전환은 지연 없이 보이되 같은 상태가 오래 지속될 때만 주기 출력이 추가됩니다.
 
 표시 가능한 값은 경과 시간, `starting/exploring/implementing/validating/validation_failed/fixing/finishing/process_exited/provider_error` 같은 컨트롤러 관측 단계, tool call 수, 관측된 변경 파일 수, tool error 수와 마지막 이벤트 이후 시간입니다. raw 모델 텍스트·source body·경로·shell 명령·diff·private evidence는 진행 출력에 포함하지 않습니다.
 
