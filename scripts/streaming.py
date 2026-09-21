@@ -7,10 +7,19 @@ from pathlib import Path
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
 MAX_LINE = 4 * 1024 * 1024
+PROGRESS_HEARTBEAT_SECONDS = 30
+
+def _looks_like_validation(command):
+    text=' '+str(command).lower()+' '
+    hints=(' pytest ',' unittest ',' npm test ',' pnpm test ',' yarn test ',' cargo test ',
+           ' go test ',' dotnet test ',' mvn test ',' gradle test ',' test ',' lint ',' check ',' build ')
+    return any(hint in text for hint in hints)
+
 
 
 class Summary:
@@ -39,7 +48,19 @@ class Summary:
         self.usage_incomplete = False
         self.tool_calls = set()
         self.submission = submission.Capture()
+        self.progress_phase = 'starting'
+        self.progress_revision = 0
+        self.validation_failed = False
 
+    def _set_progress_phase(self, phase):
+        if phase != self.progress_phase:
+            self.progress_phase = phase
+            self.progress_revision += 1
+
+    def progress(self):
+        errors=sum(v.get('error',0) for v in self.tool_status.values())
+        return {'phase':self.progress_phase,'tool_calls':sum(self.tools.values()),
+                'files_changed':len(self.files),'tool_errors':errors}
 
     def record_usage(self, event):
         part=event.get('part',{})
@@ -96,6 +117,7 @@ class Summary:
                 self.errors.append({'type':'error', 'error': {
                     'name':str(error.get('name',''))[:100],
                     'data':{'statusCode':code, 'message':str(data.get('message',''))[:1000]}}})
+                self._set_progress_phase('provider_error')
             elif kind == 'step_finish':
                 self.record_usage(event)
                 reason=part.get('reason')
@@ -124,6 +146,12 @@ class Summary:
                 tool_status=state.get('status')
                 if tool_status not in ('completed','error','running','pending'):
                     self.bad_line(); tool_status='unknown'
+                if name in ('read','glob','grep','list') and self.progress_phase=='starting':
+                    self._set_progress_phase('exploring')
+                elif name == submission.TOOL and tool_status=='completed':
+                    self._set_progress_phase('finishing')
+                elif name not in ('read','glob','grep','list','bash',submission.TOOL) and self.progress_phase=='starting':
+                    self._set_progress_phase('exploring')
                 # Bounded observed status per tool; counts remain the authoritative
                 # "was it called" signal. Status is recorded only when available and
                 # transitions once per call ID to avoid double counting updates.
@@ -136,6 +164,7 @@ class Summary:
                         self.tool_call_status[key]=tool_status
                 inp = state.get('input', {})
                 if name in ('edit','write','patch','apply_patch') and state.get('status')=='completed':
+                    self._set_progress_phase('fixing' if self.validation_failed else 'implementing')
                     path = inp.get('filePath', inp.get('path'))
                     if isinstance(path,str) and path not in self.files:
                         if len(self.files)<20: self.files.append(path[:256])
@@ -163,6 +192,15 @@ class Summary:
                     self.commands=[x for x in self.commands if x['_call']!=identity]
                     self.commands.append(record)
                     self.commands=self.commands[-10:]
+                    if _looks_like_validation(command):
+                        if record['exit'] not in (None,0) or tool_status=='error':
+                            self.validation_failed=True
+                            self._set_progress_phase('validation_failed')
+                        else:
+                            self.validation_failed=False
+                            self._set_progress_phase('validating')
+                    elif self.progress_phase=='starting':
+                        self._set_progress_phase('exploring')
 
         except (TypeError, AttributeError, ValueError):
             self.bad_line()
@@ -188,6 +226,10 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         fd, name=tempfile.mkstemp(prefix='worker-',suffix='.jsonl',dir=directory)
         log=os.fdopen(fd,'wb'); log_path=name
     p=None; completed=False; launched=False
+    if progress_stream is False:
+        progress_stream=None
+    elif progress_stream is None:
+        progress_stream=sys.stderr
     def attach(error):
         # Observed evidence must survive any raised error, including cleanup/OSError.
         summary.usage_incomplete=True
@@ -202,6 +244,29 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
             p=subprocess.Popen(['opencode',*args],cwd=cwd,env=env,stdin=stdin,
                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
             launched=True
+            started=time.monotonic(); last_event_at=None; last_progress_at=started
+            last_progress_revision=summary.progress_revision
+            def show_progress(force=False):
+                nonlocal last_progress_at,last_progress_revision
+                if not progress_stream: return
+                now=time.monotonic()
+                changed=summary.progress_revision!=last_progress_revision
+                heartbeat=bool(progress_heartbeat) and now-last_progress_at>=progress_heartbeat
+                if not (force or changed or heartbeat): return
+                snap=summary.progress()
+                parts=[f"[opencode-worker] running {int(now-started)}s",
+                       f"phase={snap['phase']}",f"tools={snap['tool_calls']}",
+                       f"files={snap['files_changed']}"]
+                if snap['tool_errors']: parts.append(f"tool_errors={snap['tool_errors']}")
+                if heartbeat and not changed:
+                    if last_event_at is None: parts.append("last_event=none")
+                    else: parts.append(f"last_event={int(now-last_event_at)}s_ago")
+                try:
+                    progress_stream.write(' · '.join(parts)+'\n'); progress_stream.flush()
+                except (OSError,ValueError):
+                    pass
+                last_progress_at=now; last_progress_revision=summary.progress_revision
+            show_progress(force=True)
             selector=selectors.DefaultSelector()
             selector.register(p.stdout,selectors.EVENT_READ,'stdout')
             selector.register(p.stderr,selectors.EVENT_READ,'stderr')
@@ -226,14 +291,19 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                                 else: buffer+=segment
                             if i<len(segments)-1:
                                 if not discard and buffer.strip():
-                                    try: summary.consume(json.loads(buffer))
+                                    try:
+                                        summary.consume(json.loads(buffer)); last_event_at=time.monotonic(); show_progress()
                                     except (ValueError,UnicodeError): summary.bad_line()
                                 buffer=b''; discard=False
+                    show_progress()
                 if buffer.strip() and not discard:
-                    try: summary.consume(json.loads(buffer))
+                    try:
+                        summary.consume(json.loads(buffer)); last_event_at=time.monotonic(); show_progress()
                     except (ValueError,UnicodeError): summary.bad_line()
                 rc=p.wait(timeout=max(.01,deadline-time.monotonic()))
                 completed=True
+                summary._set_progress_phase('process_exited')
+                show_progress(force=True)
                 return rc,summary,stderr_present,log_path
             finally:
                 selector.close()
