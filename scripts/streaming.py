@@ -27,6 +27,8 @@ class Summary:
         self.files = []
         self.commands = []
         self.command_sequence = 0
+        self.activity_sequence = 0
+        self.last_non_shell_activity = 0
         self.answer = ''
         self.session = None
         self.truncated = False
@@ -107,6 +109,9 @@ class Summary:
             elif kind == 'tool_use':
                 self.submission.consume(part, sid)
                 name = str(part.get('tool','unknown'))[:100]
+                self.activity_sequence += 1
+                if name not in ('read', 'glob', 'grep', 'list', 'bash', submission.TOOL):
+                    self.last_non_shell_activity = self.activity_sequence
                 if name not in self.tools and len(self.tools) >= 64: name = 'other'
                 call=part.get('callID') or part.get('id')
                 key=hashlib.sha256((str(event.get('sessionID',''))+'|'+str(call)).encode()).hexdigest() if call else None
@@ -135,6 +140,8 @@ class Summary:
                     if isinstance(path,str) and path not in self.files:
                         if len(self.files)<20: self.files.append(path[:256])
                         else: self.truncated=True
+                if name == 'bash' and tool_status not in ('completed','error'):
+                    self.last_non_shell_activity = self.activity_sequence
                 if name == 'bash' and tool_status in ('completed','error'):
                     meta=state.get('metadata',{})
                     exit_code=meta.get('exit')
@@ -144,9 +151,15 @@ class Summary:
                     record={'command':command[:256], 'command_truncated':len(command)>256,
                             'tool_status':tool_status,
                             'exit':exit_code if type(exit_code) is int else None,
-                            '_call':identity}
+                            '_call':identity, 'sequence':self.activity_sequence}
                     # Terminal updates replace running/duplicate calls; a bounded
                     # recent-command tail stays available as observed writer evidence.
+                    previous=next((x for x in self.commands if x['_call']==identity), None)
+                    if previous:
+                        if any(previous[k]!=record[k] for k in ('command','command_truncated','tool_status','exit')):
+                            self.bad_line()
+                        # Duplicate terminal events are not a fresh test rerun.
+                        record['sequence']=previous['sequence']
                     self.commands=[x for x in self.commands if x['_call']!=identity]
                     self.commands.append(record)
                     self.commands=self.commands[-10:]
@@ -162,6 +175,7 @@ class Summary:
 
     def public(self):
         return {'result_submission':self.submission.public(), 'session_id':self.session, 'tools':self.tools, 'tool_status':self.tool_status, 'worker_tokens':self.token_usage(),
+                'last_non_shell_activity':self.last_non_shell_activity,
                 'mutation_files_reported_by_tools':self.files, 'shell_commands':[{k:v for k,v in x.items() if k!='_call'} for x in self.commands],
                 'provider_errors':[{'name':e['error']['name'],'status_code':e['error']['data']['statusCode']} for e in self.errors[:5]], 'worker_answer':self.answer, 'summary_truncated':self.truncated,
                 'replay_safe':self.safe, 'malformed_output':self.invalid}

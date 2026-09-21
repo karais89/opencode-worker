@@ -4,6 +4,7 @@ import argparse
 import copy
 import streaming
 import submission
+import verification
 import contextlib
 import fcntl
 import hashlib
@@ -409,18 +410,25 @@ def run_worker(a,d,root,available=None):
     route=route_id(route,d)
     if getattr(a,'variant',None): validate_variant(route,a.variant,root)
     routes=[route]
-    if not a.no_fallback and (source!='one-shot' or getattr(a,'use_fallbacks',False)):
+    if not a.no_fallback and getattr(a,'use_fallbacks',False):
         routes += [route_id(r,d) for r in d['fallbacks']]
     routes=list(dict.fromkeys(routes))
     prompt=Path(a.task_file).read_text() if a.task_file else sys.stdin.read()
     if not prompt.strip(): raise Failure('empty_task','Supply --task-file or nonempty stdin.')
+    if getattr(a, '_original_brief', None):
+        prompt = ('Original task (preserve its scope and constraints):\n' + a._original_brief
+                  + '\n\nHead-confirmed correction 1/1:\n' + prompt)
     prompt = 'Repository root: '+root+'\n'+prompt
     context=discover_context(root)
     context_lines=context_prompt(context)
     if context_lines:
         prompt+='\nDiscovered project context (paths only; read lazily and only what is relevant):\n'+context_lines
         prompt+='\nShared skill sources are read-only originals: follow their SKILL.md when the task needs them; never copy or edit them. Do not print credentials or descriptor/auth tokens.'
-    prompt+='\nFinal verification: run each relevant test suite as its own direct, uncombined command (no shell chaining/pipes) and report the actual command and observed pass/fail counts. Compound-command exit 0 is not accepted as test evidence.'
+    if a.read_only:
+        prompt+='\nRead-only investigation: use native read/glob/grep/list only. Do not edit, run shell/tests, or call mutating tools. Submit changed=[] and concise findings with file/line evidence in validation. State unverified behaviour and missing capabilities in risk.'
+    else:
+        prompt+='\nFinal verification: run each relevant test suite as its own direct, uncombined command (no shell chaining/pipes) and report the actual command and observed pass/fail counts. Compound-command exit 0 is not accepted as test evidence.'
+    prompt+='\nInclude validation_commands in the result: at most 10 exact local validation shell commands, run after the final changes, without shell wrappers/chaining/pipes. Use [] for read-only findings, remote/MCP-only checks, or checks without local exit evidence. The controller checks observed command exits only; pass counts, remote completion and requirement coverage remain worker-reported. Do not invent evidence.'
     if getattr(a, '_submit_result', False):
         prompt+='\nAfter completing implementation and actual validation, call codex_worker_submit_result with status, changed, validation and risk. Use completed only when all requirements and validation are done; otherwise needs_escalation with the blocker. Keep the report within 1800 characters, with actual commands and pass/fail counts. If the tool rejects the report, correct ONLY the report and resubmit in this same session. Submit after your last development tool call. After acceptance finish; optional prose or Markdown is not machine protocol. Never fabricate validation. For remote tools verify actual completed results, not just transport exit.'
     else:
@@ -490,13 +498,39 @@ def run_head_fix(a,d,root):
         try: submission.validate(captured.get('report'))
         except ValueError as error:
             raise Failure('needs_escalation','Correction requires valid original result submission.') from error
+        context = original.get('task_context') or {}
+        brief = context.get('brief')
+        if (not isinstance(brief, str) or not brief.strip() or len(brief.encode('utf-8')) > 8192
+                or context.get('read_only') is not False):
+            raise Failure('needs_escalation','Original writable-task brief is unavailable; do not reconstruct or replay it.')
+        route = route_id(last.get('route'), {'aliases': {}})
+        variant = last.get('variant')
+        if variant is not None and not isinstance(variant, str):
+            raise Failure('needs_escalation','Original model variant is invalid.')
+        if a.model and route_id(a.model, d) != route:
+            raise Failure('needs_escalation','Correction must use the original executed model.')
+        if getattr(a, 'variant', None) and a.variant != variant:
+            raise Failure('needs_escalation','Correction must use the original executed variant.')
+        approved = context.get('allow_commands', [])
+        if not isinstance(approved, list) or any(not isinstance(x, str) for x in approved):
+            raise Failure('needs_escalation','Original command permissions are invalid.')
+        if any(x not in approved for x in getattr(a, 'allow_command', [])):
+            raise Failure('needs_escalation','Correction cannot expand the original command permissions.')
         # Claim before launch; an interrupted/failed correction must not silently replay.
         try: fd=os.open(prior.parent/'head-fix-used',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         except FileExistsError:
             raise Failure('needs_escalation','The one corrective writer has already been used; stop for further direction.')
         with os.fdopen(fd,'w') as f: f.write(str(prior)+'\n')
         args=copy.copy(a);args._lock_held=True;args._correction_of=str(prior)
-        return run_direct(args,d,root)
+        args._original_brief=brief
+        args.model=route;args.variant=variant
+        args.no_fallback=True;args.use_fallbacks=False;args.use_opencode_default=False
+        args.allow_command=list(approved)
+        pinned=copy.deepcopy(d)
+        pinned['aliases'].pop(route, None)
+        pinned['variants'].pop(route, None)
+        if variant is not None: pinned['variants'][route]=variant
+        return run_direct(args,pinned,root)
 
 
 def run_direct(a,d,root):
@@ -515,6 +549,10 @@ def run_direct(a,d,root):
     result['evidence_dir']=str(evidence)
     result['ultra_lite']=True
     result['project_root']=root
+    task_file=getattr(a,'task_file',None)
+    result['task_context']={'brief':Path(task_file).read_text() if task_file else None,
+                            'read_only':bool(getattr(a,'read_only',False)),
+                            'allow_commands':list(getattr(a,'allow_command',[]))}
     if getattr(a,'_correction_of',None):result['correction_of']=a._correction_of
     last=(result.get('attempts') or [{}])[-1]
     captured=last.get('result_submission') or {}
@@ -534,7 +572,16 @@ def run_direct(a,d,root):
     elif submission_error:
         report['failure_kind']='result_submission_failed'
         report['submission_error']=submission_error
+    observed=verification.assess(report,last)
+    if execution_status=='completed_needs_review' and not submission_error and report['status']=='completed':
+        if observed['failed']:
+            report['status']='needs_escalation'
+            report['failure_kind']='validation_failed'
+        elif getattr(a,'read_only',False) and report['changed']:
+            report['status']='needs_escalation'
+            report['failure_kind']='read_only_scope_violation'
     result['status']=report['status']
+    report['validation_evidence']=observed
     public={**report,'worker_used':result['worker_used'],'worker':{
         'model':last.get('route'),'variant':last.get('variant'),'session':last.get('session_id'),
         'elapsed_seconds':result['elapsed_seconds'],'reported_tokens':result['worker_tokens_all_attempts'].get('reported_total'),
@@ -574,6 +621,7 @@ def main():
         av=models(root)
         emit({'models':av,'providers':sorted({r.split('/')[0] for r in av}),
               'deepseek_v4_1_flash':[r for r in av if re.search(r'deepseek.*v4[.-]1.*flash',r,re.I)],
+              'deepseek_flash':[r for r in av if re.search(r'deepseek.*flash',r,re.I)],
               'note':'Inventory is not an authentication, billing, or coding-capability guarantee.'}); return
     if a.cmd=='resolve':
         source,route=resolve(d,root,a.model,a.use_opencode_default)
@@ -595,7 +643,7 @@ def main():
                 raise Failure('invalid_brief','Supply a nonempty brief of at most 8 KiB.')
             brief_path=Path(temporary)/'brief.txt';brief_path.write_text(brief)
             a.task_file=str(brief_path)
-            if not resolve(d,root,a.model,a.use_opencode_default)[1]:
+            if not a.fix_from and not resolve(d,root,a.model,a.use_opencode_default)[1]:
                 deliver(execution_evidence(run_worker(a,d,root)));sys.exit(2)
             result=run_head_fix(a,d,root) if a.fix_from else run_direct(a,d,root)
         deliver(result)

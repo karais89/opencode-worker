@@ -21,6 +21,14 @@ def validate(report):
     if not isinstance(report.get('risk'), str) or not report['risk'].strip():
         raise ValueError('risk must be a nonempty string')
     result = {key: report[key] for key in ('status', 'changed', 'validation', 'risk')}
+    if 'validation_commands' in report:
+        commands = report['validation_commands']
+        if (not isinstance(commands, list) or len(commands) > 10
+                or any(not isinstance(x, str) or not x.strip() or len(x) > 256 for x in commands)):
+            raise ValueError('validation_commands must contain at most 10 nonempty commands of at most 256 characters')
+        if len(set(commands)) != len(commands):
+            raise ValueError('validation_commands must not contain duplicates')
+        result['validation_commands'] = commands
     if len(json.dumps(result, ensure_ascii=False, separators=(',', ':'))) > LIMIT:
         raise ValueError('report exceeds 1800 characters; shorten the report, not the development work')
     return result

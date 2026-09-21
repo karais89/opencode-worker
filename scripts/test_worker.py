@@ -221,12 +221,12 @@ elif sys.argv[1]=='run':
             self.assertEqual(call('status')[1]['config']['default'],'b/b')
             self.assertEqual(call('set-default','missing/no')[0],2)
             call('set-default','a/a'); call('set-fallbacks','b/b')
-            rc,result=call('run','--task-file',str(task))
+            rc,result=call('run','--task-file',str(task),'--use-fallbacks')
             self.assertEqual(rc,0); self.assertEqual(result['worker']['attempts'],2)
             self.assertIn('second line',result['validation'][0])
             self.assertNotIn('shell_commands',result['worker'])
             # Full output remains available for compatibility.
-            full=call('run','--task-file',str(task),'--full-output')[1]
+            full=call('run','--task-file',str(task),'--full-output','--use-fallbacks')[1]
             self.assertIn('second line',full['attempts'][1]['worker_answer'])
             self.assertEqual(call('set-default','b/b','--variant','max')[0],0)
             variant_result=call('run','--task-file',str(task))[1]
@@ -250,7 +250,7 @@ elif sys.argv[1]=='run':
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as t:
             task=Path(t)/'task';task.write_text('task')
-            a=Namespace(model=None,use_opencode_default=False,no_fallback=False,task_file=str(task),read_only=True,timeout=5,config=Path(t)/'cfg')
+            a=Namespace(model=None,use_opencode_default=False,no_fallback=False,use_fallbacks=True,task_file=str(task),read_only=True,timeout=5,config=Path(t)/'cfg')
             error={'type':'error','error':{'name':'UnknownError','data':{'message':'Unexpected server error. Check server logs for details.'}}}
             done={'type':'step_finish','part':{'reason':'stop'}}
             with patch.object(w,'CONFIG',Path(t)/'config.json'),patch.object(w,'models',return_value=['b/b']) as discovery,patch.object(w.streaming,'run',side_effect=[stream_result(1,json.dumps(error)),stream_result(0,json.dumps(done))]):
@@ -326,7 +326,7 @@ elif sys.argv[1]=='run':
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as t:
             task=Path(t)/'task'; task.write_text('task')
-            a=Namespace(model=None,use_opencode_default=False,no_fallback=False,task_file=str(task),read_only=True,timeout=5,config=Path(t)/'cfg')
+            a=Namespace(model=None,use_opencode_default=False,no_fallback=False,use_fallbacks=True,task_file=str(task),read_only=True,timeout=5,config=Path(t)/'cfg')
             read={'type':'tool_use','part':{'tool':'read','state':{'status':'completed'}}}
             error={'type':'error','error':{'name':'ModelNotFoundError'}}
             done={'type':'step_finish','part':{'reason':'stop'}}
@@ -340,7 +340,7 @@ elif sys.argv[1]=='run':
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as t:
             task=Path(t)/'task';task.write_text('task')
-            a=Namespace(model='a/a',use_opencode_default=False,no_fallback=False,task_file=str(task),read_only=False,timeout=5,config=Path(t)/'cfg')
+            a=Namespace(model='a/a',use_opencode_default=False,no_fallback=False,use_fallbacks=True,task_file=str(task),read_only=False,timeout=5,config=Path(t)/'cfg')
             events=[{'type':'tool_use','part':{'tool':'edit','state':{'status':'error'}}},{'type':'error','error':{'name':'APIError','data':{'statusCode':503}}}]
             with patch.object(w,'CONFIG',Path(t)/'config.json'),patch.object(w.streaming,'run',return_value=stream_result(0,'\n'.join(map(json.dumps,events)))) as invoke:
                 result=w.run_worker(a,{**w.BASE,'fallbacks':['b/b']},t,['a/a','b/b'])
