@@ -22,6 +22,12 @@ OpenCode CLI 및 provider 인증을 먼저 준비하세요. Skill은 인증 파�
 
 `models`의 `deepseek_flash`는 이름에 DeepSeek와 Flash가 있는 후보를 찾는 보조 목록입니다. 기존 `deepseek_v4_1_flash`는 버전 이름이 명시된 후보만 유지합니다. 일반 별칭을 V4.1로 단정하지 않습니다. 모델 목록은 인증·과금·성능·실제 모델 정체성의 보장이 아닙니다.
 
+## 명시적 Worker 호출과 승인
+
+`$opencode-worker`처럼 Skill을 명시적으로 지정하면서 저장소 작업 실행을 요청한 경우, 그 요청 자체를 **해당 작업 범위에서 설정된 OpenCode Worker와 저장 provider/model route를 실행하는 승인**으로 취급합니다. 외부 모델 provider를 사용한다는 이유만으로 Head가 대화형 확인 질문을 한 번 더 만들지 않습니다.
+
+이 규칙은 호스트 보안 승인을 우회하지 않습니다. Codex/호스트가 sandbox 또는 네트워크 접근에 대해 네이티브 permission escalation을 요구하면 Head는 별도 대화형 재확인 없이 곧바로 정상 권한 인터페이스를 요청합니다. 호스트 UI가 사용자 승인을 요구하면 그 UI를 그대로 사용하고, 호스트가 거부하거나 필요한 권한을 제공하지 않으면 중단해 실제 거부 사유를 보고합니다. `off` 모드, Worker 권한 제한, provider route, fallback 정책도 그대로 유지됩니다.
+
 ## 실행
 
 ```sh
@@ -31,6 +37,14 @@ python3 <skill>/scripts/worker.py --project /absolute/repo run --brief /absolute
 brief는 목표·제약·완료 조건만 짧게(최대 8 KiB) 작성합니다. Worker가 프로젝트 지침과 원본 공유 Skill/CLI/MCP를 탐색합니다. 발견이 도구 설치나 연결 성공을 보장하지는 않습니다. 필요한 도구가 없으면 실제 blocker를 보고합니다. shell을 제한하는 read-only 모드는 일반 Writer에 적용하지 않습니다.
 
 읽기만으로 해결할 수 있는 큰 코드 조사에는 `--read-only`를 추가합니다. native read/glob/grep/list와 제출 도구 외의 변경·shell·임의 MCP 도구는 허용하지 않습니다. `changed=[]`, `validation`에는 파일/줄 근거와 조사 결과, `risk`에는 미확인 사항을 제출합니다. 실행이 필요한 조사를 이 모드로 완수했다고 보고하지 않습니다.
+
+## 실행 중 진행 텔레메트리
+
+`streaming.py`는 OpenCode JSONL을 소비하면서 기존 증거 수집과 동시에 작은 상태만 stderr에 출력합니다. stdout의 최종 구조화 결과 형식은 바꾸지 않습니다. 기본 heartbeat는 30초이며 단계가 바뀌면 즉시 한 줄을 출력합니다.
+
+표시 가능한 값은 경과 시간, `starting/exploring/implementing/validating/validation_failed/fixing/finishing/process_exited/provider_error` 같은 컨트롤러 관측 단계, tool call 수, 관측된 변경 파일 수, tool error 수와 마지막 이벤트 이후 시간입니다. raw 모델 텍스트·source body·경로·shell 명령·diff·private evidence는 진행 출력에 포함하지 않습니다.
+
+단계는 관측 이벤트에 대한 UX 힌트이며 완료율이나 정확성 판정이 아닙니다. 특히 heartbeat는 프로세스가 살아 있음을 보여줄 뿐 정상 진행을 보장하지 않습니다. validation 단계 역시 명령 이름의 보수적인 힌트로만 분류하며 실제 성공 판정은 최종 submission과 validation evidence 규칙을 따릅니다.
 
 ## 수정 1회와 원래 맥락
 

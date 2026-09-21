@@ -56,7 +56,7 @@ python3 "$WORKER_SKILL/scripts/worker.py" resolve
 $opencode-worker CSV 가져오기 기능을 구현하고 테스트해줘.
 ```
 
-명시적 지정은 해당 Skill 사용을 요청하는 방법입니다. off 설정이나 호스트 권한 거부를 우회하지 않습니다. UI의 Skill 선택기로도 지정할 수 있습니다. CLI/IDE는 `$` 또는 `/skills`를 지원하며, ChatGPT UI는 `@` 선택기를 사용합니다.
+명시적으로 Skill을 지정하고 Worker에게 저장소 작업 실행을 요청하면, 그 요청은 해당 작업에서 **설정된 OpenCode Worker와 저장 provider/model route를 실행하라는 승인**으로 취급합니다. 따라서 외부 provider를 사용한다는 이유만으로 Codex가 동일한 내용을 대화형으로 다시 확인하지 않습니다. 다만 이것은 호스트의 네이티브 보안 승인을 우회하지 않습니다. sandbox/네트워크 permission escalation이 필요하면 Codex는 정상 호스트 권한 UI를 직접 요청하고, 호스트가 거부하면 실행하지 않습니다. `off` 설정이나 기존 Worker 권한 제한도 그대로 유지됩니다. UI의 Skill 선택기로도 지정할 수 있습니다. CLI/IDE는 `$` 또는 `/skills`를 지원하며, ChatGPT UI는 `@` 선택기를 사용합니다.
 
 Codex가 짧은 작업 지시를 전달하고 Worker가 AGENTS.md·공유 Skill·도구를 발견해 탐색/구현/테스트/오류 수정을 수행합니다. Head는 압축된 결과를 확인하며 전체 소스나 전체 테스트를 습관적으로 다시 읽거나 실행하지 않습니다.
 
@@ -68,6 +68,19 @@ Worker: DeepSeek V4.1 Flash · 2회(수정 1회) · 71초
 ```
 
 작업이 실행되지 않았다면 미사용 사유를 표시합니다. 최종 응답의 중심은 구현 결과·검증·남은 위험입니다.
+
+### 실행 중 진행 표시
+
+Worker 실행 중에는 최종 JSON과 별도로 stderr에 작은 진행 텔레메트리를 출력합니다. raw 모델 응답·소스·파일 경로·shell 명령·diff는 노출하지 않고, 컨트롤러가 이미 관측한 이벤트에서 단계와 개수만 표시합니다.
+
+```text
+[opencode-worker] running 0s · phase=starting · tools=0 · files=0
+[opencode-worker] running 18s · phase=exploring · tools=12 · files=0
+[opencode-worker] running 43s · phase=implementing · tools=21 · files=3
+[opencode-worker] running 72s · phase=validating · tools=25 · files=3
+```
+
+단계 변화가 없으면 기본 30초마다 heartbeat를 냅니다. 이때 `last_event=...s_ago` 또는 `last_event=none`으로 마지막 관측 시점을 표시할 수 있습니다. 이것은 프로세스가 실행 중이라는 관측일 뿐 작업이 정상·성공 중이라는 판정이 아닙니다. 진행률 퍼센트는 추측하지 않습니다.
 
 ### 읽기 전용 조사
 
