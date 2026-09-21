@@ -38,6 +38,14 @@ brief는 목표·제약·완료 조건만 짧게(최대 8 KiB) 작성합니다. 
 
 읽기만으로 해결할 수 있는 큰 코드 조사에는 `--read-only`를 추가합니다. native read/glob/grep/list와 제출 도구 외의 변경·shell·임의 MCP 도구는 허용하지 않습니다. `changed=[]`, `validation`에는 파일/줄 근거와 조사 결과, `risk`에는 미확인 사항을 제출합니다. 실행이 필요한 조사를 이 모드로 완수했다고 보고하지 않습니다.
 
+## 실행 중 진행 텔레메트리
+
+`streaming.py`는 OpenCode JSONL을 소비하면서 기존 증거 수집과 동시에 작은 상태만 stderr에 출력합니다. stdout의 최종 구조화 결과 형식은 바꾸지 않습니다. 기본 heartbeat는 30초이며 단계가 바뀌면 즉시 한 줄을 출력합니다.
+
+표시 가능한 값은 경과 시간, `starting/exploring/implementing/validating/validation_failed/fixing/finishing/process_exited/provider_error` 같은 컨트롤러 관측 단계, tool call 수, 관측된 변경 파일 수, tool error 수와 마지막 이벤트 이후 시간입니다. raw 모델 텍스트·source body·경로·shell 명령·diff·private evidence는 진행 출력에 포함하지 않습니다.
+
+단계는 관측 이벤트에 대한 UX 힌트이며 완료율이나 정확성 판정이 아닙니다. 특히 heartbeat는 프로세스가 살아 있음을 보여줄 뿐 정상 진행을 보장하지 않습니다. validation 단계 역시 명령 이름의 보수적인 힌트로만 분류하며 실제 성공 판정은 최종 submission과 validation evidence 규칙을 따릅니다.
+
 ## 수정 1회와 원래 맥락
 
 실제 입력으로 재현한 결함 또는 명백한 요구사항 위반에만 `--fix-from <returned-evidence-dir>/writer.json --brief <short-correction.txt>`로 수정 1회를 요청합니다. 원래 project와 config를 유지하세요. 새로운 일반 run으로 제한을 우회하지 마세요. 두 번째 수정은 차단됩니다. Reviewer와 자동 수정 체인은 없습니다.
