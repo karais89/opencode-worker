@@ -180,7 +180,7 @@ class Summary:
                 'provider_errors':[{'name':e['error']['name'],'status_code':e['error']['data']['statusCode']} for e in self.errors[:5]], 'worker_answer':self.answer, 'summary_truncated':self.truncated,
                 'replay_safe':self.safe, 'malformed_output':self.invalid}
 
-def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None):
+def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_stream=None, progress_heartbeat=PROGRESS_HEARTBEAT_SECONDS):
     summary=Summary(replay_check)
     log=None; log_path=None
     if log_dir:
