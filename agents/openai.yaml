@@ -1,6 +1,6 @@
 interface:
   display_name: "OpenCode Worker"
-  short_description: "Delegate implementation and testing to OpenCode"
-  default_prompt: "Use $opencode-worker to implement this task, run the needed tests, and check the result."
+  short_description: "Delegate coding, testing and code investigation"
+  default_prompt: "Use $opencode-worker to implement or investigate this task, validate within its authorized scope, and check the result."
 policy:
   allow_implicit_invocation: true

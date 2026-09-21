@@ -17,6 +17,25 @@ def summary(*events):
     return result
 
 class SubmissionTests(unittest.TestCase):
+    def setUp(self):
+        # Hermetic SDK surface fixture, not a live OpenCode/SDK integration test.
+        # Exercise the actual plugin execute() validator without an installed CLI,
+        # provider credentials, network, or changes to user configuration.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        config = Path(temporary.name) / 'config'
+        package = config / 'node_modules/@opencode-ai/plugin'
+        (package / 'dist').mkdir(parents=True)
+        (package / 'package.json').write_text('{"type":"module"}')
+        (package / 'dist/tool.js').write_text(
+            'const shape = { optional() { return this; } };\n'
+            'export const tool = Object.assign(x => x, { schema: {\n'
+            ' string: () => shape, array: () => shape, enum: () => shape\n'
+            '} });\n')
+        environment = patch.dict(os.environ, {'OPENCODE_CONFIG_DIR': str(config)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_actual_markdown_prefix_and_verbose_prose_are_not_protocol(self):
         for text in ['[BenchEvidence/validation.md](filePath:///tmp/proof)\n'+json.dumps(REPORT),'```json\n'+json.dumps(REPORT)+'\n```','[arbitrary] {prose} '*500]:
             x=summary(event(),{'type':'text','sessionID':'ses-one','part':{'text':text}})
@@ -88,7 +107,36 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(after['agent']['codex-worker']['permission'].pop(s.TOOL),'allow')
         self.assertEqual(after['agent'],before['agent'])
 
-    def test_actual_js_plugin_validator_and_same_instance_repair(self):
+    def test_validation_commands_python_js_parity_with_sdk_fixture(self):
+        env=w.worker_env();s.configure(env)
+        plugin=(Path(__file__).resolve().parent.parent/'assets/submit-result.mjs').as_uri()
+        candidates = [REPORT, {**REPORT, 'validation_commands': []},
+                      {**REPORT, 'validation_commands': ['pytest -q']},
+                      {**REPORT, 'validation_commands': ['x' * 256]},
+                      {**REPORT, 'validation_commands': [chr(0x1f680) * 256]}]
+        candidates += [{**REPORT, 'validation_commands': commands} for commands in
+                       (None, 'pytest', [''], [' '], [None], ['pytest'] * 2,
+                        ['x' * 257], [str(i) for i in range(11)],
+                        [('x' * 200) + str(i) for i in range(10)])]
+        expected=[]
+        for candidate in candidates:
+            try: expected.append({'accepted': True, 'report': s.validate(candidate)})
+            except ValueError: expected.append({'accepted': False})
+        code = """
+import create from PLUGIN;
+const t=(await create()).tool.codex_worker_submit_result;
+const results=[];
+for (const report of CANDIDATES) {
+ try { results.push(JSON.parse(await t.execute(report,{}))); }
+ catch { results.push({accepted:false}); }
+}
+console.log(JSON.stringify(results));
+""".replace('PLUGIN',json.dumps(plugin)).replace('CANDIDATES',json.dumps(candidates))
+        process=subprocess.run(['node','--input-type=module','-e',code],env=env,text=True,capture_output=True)
+        self.assertEqual(process.returncode,0,process.stderr)
+        self.assertEqual(json.loads(process.stdout),expected)
+
+    def test_js_plugin_validator_and_same_instance_repair_with_sdk_fixture(self):
         env=w.worker_env();s.configure(env)
         plugin=(Path(__file__).resolve().parent.parent/'assets/submit-result.mjs').as_uri()
         code='''
