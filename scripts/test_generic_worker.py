@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -170,6 +171,50 @@ class CompactOutputTests(unittest.TestCase):
     def test_full_output_preserved(self):
         payload=w.encode_result(self._rich())
         self.assertIn('shell_commands',payload)
+
+
+class ProgressTelemetryTests(unittest.TestCase):
+    def test_progress_is_bounded_and_does_not_leak_raw_details(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe=Path(t)/'opencode'
+            secret_path='/private/project/super-secret.py'
+            secret_command='pytest SECRET_SUITE -q'
+            events=[
+                {'type':'tool_use','sessionID':'s','part':{'tool':'read','callID':'r','state':{'status':'completed','input':{'filePath':secret_path}}}},
+                {'type':'tool_use','sessionID':'s','part':{'tool':'edit','callID':'e','state':{'status':'completed','input':{'filePath':secret_path}}}},
+                {'type':'tool_use','sessionID':'s','part':{'tool':'bash','callID':'b','state':{'status':'error','input':{'command':secret_command},'metadata':{'exit':1}}}},
+                {'type':'tool_use','sessionID':'s','part':{'tool':'edit','callID':'e2','state':{'status':'completed','input':{'filePath':secret_path}}}},
+                {'type':'step_finish','sessionID':'s','part':{'id':'done','reason':'stop','tokens':{'input':1,'output':1,'total':2}}},
+            ]
+            exe.write_text('#!/usr/bin/env python3\\nimport json\\nevents='+repr(events)+'\\nfor event in events: print(json.dumps(event), flush=True)\\n')
+            exe.chmod(0o700)
+            env={**os.environ,'PATH':t+os.pathsep+os.environ['PATH']}
+            progress=io.StringIO()
+            rc,summary,_,_=w.streaming.run(['run'],t,5,'task',env,w.safe_to_replay,
+                                           progress_stream=progress,progress_heartbeat=0.01)
+            self.assertEqual(rc,0)
+            text=progress.getvalue()
+            for phase in ('starting','exploring','implementing','validation_failed','fixing','process_exited'):
+                self.assertIn('phase='+phase,text)
+            self.assertNotIn(secret_path,text)
+            self.assertNotIn(secret_command,text)
+            self.assertNotIn('SECRET_SUITE',text)
+            self.assertEqual(summary.progress()['phase'],'process_exited')
+
+    def test_progress_heartbeat_reports_silence_without_claiming_success(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe=Path(t)/'opencode'
+            exe.write_text('#!/usr/bin/env python3\\nimport time\\ntime.sleep(0.12)\\n')
+            exe.chmod(0o700)
+            env={**os.environ,'PATH':t+os.pathsep+os.environ['PATH']}
+            progress=io.StringIO()
+            rc,_,_,_=w.streaming.run(['run'],t,5,'task',env,w.safe_to_replay,
+                                      progress_stream=progress,progress_heartbeat=0.03)
+            self.assertEqual(rc,0)
+            text=progress.getvalue()
+            self.assertIn('last_event=none',text)
+            self.assertNotIn('success',text.lower())
+            self.assertNotIn('normal',text.lower())
 
 
 if __name__=='__main__':
