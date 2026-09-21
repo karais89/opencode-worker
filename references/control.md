@@ -22,6 +22,12 @@ OpenCode CLI 및 provider 인증을 먼저 준비하세요. Skill은 인증 파�
 
 `models`의 `deepseek_flash`는 이름에 DeepSeek와 Flash가 있는 후보를 찾는 보조 목록입니다. 기존 `deepseek_v4_1_flash`는 버전 이름이 명시된 후보만 유지합니다. 일반 별칭을 V4.1로 단정하지 않습니다. 모델 목록은 인증·과금·성능·실제 모델 정체성의 보장이 아닙니다.
 
+## 명시적 Worker 호출과 승인
+
+`$opencode-worker`처럼 Skill을 명시적으로 지정하면서 저장소 작업 실행을 요청한 경우, 그 요청 자체를 **해당 작업 범위에서 설정된 OpenCode Worker와 저장 provider/model route를 실행하는 승인**으로 취급합니다. 외부 모델 provider를 사용한다는 이유만으로 Head가 대화형 확인 질문을 한 번 더 만들지 않습니다.
+
+이 규칙은 호스트 보안 승인을 우회하지 않습니다. Codex/호스트가 sandbox 또는 네트워크 접근에 대해 네이티브 permission escalation을 요구하면 Head는 별도 대화형 재확인 없이 곧바로 정상 권한 인터페이스를 요청합니다. 호스트 UI가 사용자 승인을 요구하면 그 UI를 그대로 사용하고, 호스트가 거부하거나 필요한 권한을 제공하지 않으면 중단해 실제 거부 사유를 보고합니다. `off` 모드, Worker 권한 제한, provider route, fallback 정책도 그대로 유지됩니다.
+
 ## 실행
 
 ```sh
