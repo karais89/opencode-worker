@@ -12,7 +12,7 @@ import tempfile
 import time
 
 MAX_LINE = 4 * 1024 * 1024
-PROGRESS_HEARTBEAT_SECONDS = 30
+PROGRESS_HEARTBEAT_SECONDS = 60
 
 def _looks_like_validation(command):
     text=' '+str(command).lower()+' '

@@ -174,6 +174,9 @@ class CompactOutputTests(unittest.TestCase):
 
 
 class ProgressTelemetryTests(unittest.TestCase):
+    def test_default_progress_heartbeat_is_sixty_seconds(self):
+        self.assertEqual(w.streaming.PROGRESS_HEARTBEAT_SECONDS,60)
+
     def test_progress_is_bounded_and_does_not_leak_raw_details(self):
         with tempfile.TemporaryDirectory() as t:
             exe=Path(t)/'opencode'
