@@ -178,7 +178,7 @@ class LiteV2Tests(unittest.TestCase):
             exe = Path(t) / "opencode"
             exe.write_text(
                 "#!/usr/bin/env python3\nimport json,time\n"
-                "for i in range(4):\n"
+                "for i in range(7):\n"
                 "    print(json.dumps({'type':'text','sessionID':'s','part':{'text':'step'}}),flush=True)\n"
                 "    time.sleep(0.2)\n"
                 "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
@@ -187,10 +187,10 @@ class LiteV2Tests(unittest.TestCase):
             env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
             started = time.monotonic()
             rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
-                                              inactivity_timeout=0.5, progress_stream=False, progress_heartbeat=0)
+                                              inactivity_timeout=1.0, progress_stream=False, progress_heartbeat=0)
             elapsed = time.monotonic() - started
             self.assertEqual(rc, 0)
-            self.assertGreater(elapsed, 0.5)  # total exceeded the inactivity window while active
+            self.assertGreater(elapsed, 1.0)  # total exceeded the inactivity window while active
             self.assertEqual((summary.last_finish or {}).get("part", {}).get("reason"), "stop")
 
     def test_streaming_progress_heartbeat_does_not_reset_inactivity(self):
