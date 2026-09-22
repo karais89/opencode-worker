@@ -277,7 +277,7 @@ class LiteV2Tests(unittest.TestCase):
         self.assertEqual(self.result(native, read_only=True)["status"], "completed")
         self.assertEqual(self.result(events(value), read_only=True)["status"], "needs_escalation")
 
-    def test_lock_is_config_independent_and_full_compatible(self):
+    def test_lock_is_config_independent(self):
         expected = self.default.parent / "locks" / (lite.hashlib.sha256(os.fsencode(str(self.root.resolve()))).hexdigest() + ".lock")
         self.assertEqual(lite.lock_path(str(self.root), self.cfg), expected)
         self.assertEqual(lite.lock_path(str(self.root), self.root / "other/config.json"), expected)
@@ -361,7 +361,7 @@ class LiteV2Tests(unittest.TestCase):
             with self.subTest(metadata=metadata), patch.object(lite.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=payload)):
                 with self.assertRaises(lite.Failure): lite.model_inventory(str(self.root), 'provider')
 
-    def test_config_updates_share_full_lock(self):
+    def test_config_updates_share_config_lock(self):
         args = lite.parser().parse_args(["set-mode", "manual"])
         with lite.file_lock(self.cfg.with_suffix(".lock")):
             with self.assertRaises(lite.Failure): lite.update_config(args, self.cfg, str(self.root))
@@ -378,7 +378,7 @@ class LiteV2Tests(unittest.TestCase):
         inventory.assert_not_called()
         self.assertIsNone(lite.resolve_route(lite.load(self.cfg), str(self.root))[1])
 
-    def test_full_subprocess_fixture_exercises_real_launcher_and_jsonl(self):
+    def test_subprocess_fixture_exercises_real_launcher_and_jsonl(self):
         exe = self.root / "opencode"
         captured = self.root / "fixture-capture.json"
         payload = events()

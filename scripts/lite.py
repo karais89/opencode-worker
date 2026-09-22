@@ -121,7 +121,7 @@ def mode_for(data, root):
 
 
 def lock_path(root, cfg_path=None):
-    # Same namespace as Full, independent of --config. Do not unlink live lock files.
+    # Use one namespace independent of --config. Do not unlink live lock files.
     digest = hashlib.sha256(os.fsencode(canonical_project(root))).hexdigest()
     return DEFAULT_CONFIG.parent / "locks" / (digest + ".lock")
 
@@ -292,7 +292,7 @@ def model_inventory(root, provider=None):
 
 
 def update_config(args, path, root):
-    # Share Full's config lock and atomic write convention; preserve unknown fields.
+    # Share the config lock and atomic write convention; preserve unknown fields.
     with file_lock(path.with_suffix(".lock")):
         data = load(path)
         if args.action == "set-mode":

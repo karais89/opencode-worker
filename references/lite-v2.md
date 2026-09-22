@@ -17,8 +17,8 @@ Node.js는 실제 JavaScript 제출 도구와 제품 테스트에 필요하다.
 
 기본 설정은 `${XDG_CONFIG_HOME:-~/.config}/opencode-worker/config.json`이다.
 `--config` 또는 `OPENCODE_WORKER_CONFIG`로 대체 파일을 선택할 수 있다.
-Full의 writer_default/default, projects, variants, aliases, mode, project_modes를 읽는다.
-알 수 없는 Full 필드는 보존하지만 fallback 등은 Lite 실행에서 사용하지 않는다.
+기존 설정의 writer_default/default, projects, variants, aliases, mode, project_modes를 읽는다.
+알 수 없는 설정 필드는 보존하지만 fallback 등은 Lite 실행에서 사용하지 않는다.
 
 ```sh
 python3 scripts/lite.py models
@@ -54,7 +54,7 @@ python3 scripts/lite.py --project /absolute/repo set-mode manual --project-only
 python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
 ```
 
-전역 off는 절대 중단이다. 과거 Full의 project override 우선순위와 달리 프로젝트 auto로 되살아나지 않는다.
+전역 off는 절대 중단이며 프로젝트 auto로 되살아나지 않는다.
 그 외에는 프로젝트 모드가 전역 모드를 상속/재정의한다. manual은 --explicit이 필요하다.
 
 실행에는 반드시 --project를 지정한다. 읽기 전용 조사는 --read-only, 필요하고 승인된 외부 스킬 원문은
@@ -63,9 +63,9 @@ python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
 원래 `.agents/worker-capabilities.json` 자동 발견과 광범위 공유 스킬 자동 허용은 이식하지 않았다.
 특정 CLI/MCP/Editor가 실제 연결됐는지는 별개다. 필요한 도구가 없으면 blocker로 보고한다.
 
-잠금은 Full과 같은 기본 opencode-worker/locks의 canonical checkout 해시를 사용한다.
---config와 무관하며 같은 사용자 HOME/XDG 설정 공간에서 Full/Lite가 공유한다.
-서로 다른 HOME/XDG, 비협조적 프로세스까지 막는 OS 전역 보장은 아니다. 설정 변경도 Full과 같은 .lock을 사용한다.
+잠금은 기본 opencode-worker/locks의 canonical checkout 해시를 사용한다.
+--config와 무관하며 같은 사용자 HOME/XDG 설정 공간에서 공유한다.
+서로 다른 HOME/XDG, 비협조적 프로세스까지 막는 OS 전역 보장은 아니다. 설정 변경도 같은 .lock을 사용한다.
 
 ## 결과 의미
 
@@ -112,7 +112,6 @@ python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt 
 자동 fallback/replay, --fix-from 수정 체인, 전체 Skill 카탈로그 주입, 상세 evidence 저장은 없다.
 기존 streaming/submission/verification 모듈을 재사용한다. 파일이 존재하거나 import됐다는 이유만으로
 추가 모델 턴이 생기지는 않는다. 반대로 런처만 줄 수를 세어 전체가 가볍다고 주장하지 않는다.
-Full의 worker.py와 테스트는 저장소에 비교 기준으로 남으며 Lite 정상 경로에서는 import하지 않는다.
 
 ## 검증
 
@@ -122,4 +121,3 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 테스트는 가짜 CLI/SDK와 실제 JSONL 처리 경로를 사용한다. 실제 provider 통합·품질·사용량 절감을 입증하지 않는다.
-실험 브랜치를 승인 없이 main으로 승격하거나 설치된 동일 이름의 Skill을 덮어쓰지 않는다.

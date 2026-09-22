@@ -6,7 +6,7 @@ description: Codex/ChatGPT Head가 목표와 정확한 저장소를 정하고 Op
 # OpenCode Worker Lite v2
 
 **Head → 짧은 작업 지시 → OpenCode 한 세션 → 압축 결과 → Head 판단**을 유지한다.
-`worker.py`를 호출하지 않는다. `lite.py`는 설정·잠금·실행·결과 관측만 담당한다.
+`lite.py`는 설정·잠금·실행·결과 관측만 담당한다.
 별도 Planner/Reviewer, 모델 자동 전환, 자동 재실행·수정 체인을 만들지 않는다.
 **1회는 OpenCode CLI 실행/세션 수다.** 세션 안의 모델 요청·도구 호출·테스트 수정은 여러 번일 수 있다.
 
