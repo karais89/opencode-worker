@@ -166,7 +166,7 @@ class LiteV2Tests(unittest.TestCase):
     def test_streaming_inactivity_timeout_terminates_silent_process(self):
         with tempfile.TemporaryDirectory() as t:
             exe = Path(t) / "opencode"
-            exe.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
+            exe.write_text(f"#!{sys.executable} -S\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
             env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
             with self.assertRaises(TimeoutError) as caught:
                 streaming.run(["run"], t, None, "task", env, lambda _: False,
@@ -177,7 +177,7 @@ class LiteV2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             exe = Path(t) / "opencode"
             exe.write_text(
-                "#!/usr/bin/env python3\nimport json,time\n"
+                f"#!{sys.executable} -S\nimport json,time\n"
                 "for i in range(7):\n"
                 "    print(json.dumps({'type':'text','sessionID':'s','part':{'text':'step'}}),flush=True)\n"
                 "    time.sleep(0.2)\n"
@@ -196,7 +196,7 @@ class LiteV2Tests(unittest.TestCase):
     def test_streaming_progress_heartbeat_does_not_reset_inactivity(self):
         with tempfile.TemporaryDirectory() as t:
             exe = Path(t) / "opencode"
-            exe.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
+            exe.write_text(f"#!{sys.executable} -S\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
             env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
             progress = io.StringIO()
             with self.assertRaises(TimeoutError) as caught:
@@ -209,7 +209,7 @@ class LiteV2Tests(unittest.TestCase):
     def test_streaming_normal_completion_and_provider_error_are_not_timeouts(self):
         with tempfile.TemporaryDirectory() as t:
             exe = Path(t) / "opencode"
-            exe.write_text("#!/usr/bin/env python3\nimport json\n"
+            exe.write_text(f"#!{sys.executable} -S\nimport json\n"
                            "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
                            "'tokens':{'input':1,'output':1,'total':2}}}))\n")
             exe.chmod(0o700)
@@ -218,7 +218,7 @@ class LiteV2Tests(unittest.TestCase):
                                               inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
             self.assertEqual(rc, 0)
             self.assertEqual((summary.last_finish or {}).get("part", {}).get("reason"), "stop")
-            exe.write_text("#!/usr/bin/env python3\nimport json\n"
+            exe.write_text(f"#!{sys.executable} -S\nimport json\n"
                            "print(json.dumps({'type':'error','error':{'name':'APIError','data':{'statusCode':500}}}))\n")
             rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
                                               inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
@@ -382,7 +382,7 @@ class LiteV2Tests(unittest.TestCase):
         exe = self.root / "opencode"
         captured = self.root / "fixture-capture.json"
         payload = events()
-        exe.write_text("#!/usr/bin/env python3\nimport sys,json,os\n"
+        exe.write_text(f"#!{sys.executable} -S\nimport sys,json,os\n"
                        "assert sys.argv[1]=='run', 'unexpected extra CLI call'\n"
                        "assert not os.path.exists(" + repr(str(captured)) + "), 'unexpected replay'\n"
                        "json.dump({'args':sys.argv[1:],'prompt':sys.stdin.read()},open(" + repr(str(captured)) + ",'w'))\n"

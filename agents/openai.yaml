@@ -1,6 +1,6 @@
 interface:
-  display_name: "OpenCode Worker Lite v2"
-  short_description: "One OpenCode worker with pinned routing and compact evidence"
-  default_prompt: "Use $opencode-worker to hand this repository task to one configured OpenCode Worker, then check only the compact result and concrete gaps."
+  display_name: "OpenCode 작업 위임"
+  short_description: "작업을 한 세션에 위임하고 결과와 검증 근거를 확인합니다"
+  default_prompt: "$opencode-worker로 이 저장소 작업을 설정된 OpenCode Worker 한 세션에 맡기고, 압축 결과와 구체적인 미확인 사항만 점검해 주세요."
 policy:
   allow_implicit_invocation: true

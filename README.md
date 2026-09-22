@@ -1,55 +1,100 @@
-# opencode-worker — Lite v2
+# OpenCode Worker — Lite v2
 
-Lite v2가 opencode-worker의 현재 구현이다.
-사용자가 제공한 Lite의 **Codex Head → OpenCode 실행 Worker → 압축 결과 → Head 판단**을 따른다.
-모델 선택·권한·결과 관측에 필요한 작은 로컬 실행기는 남긴다. 순수 SKILL.md 한 파일 버전은 아니다.
+Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 결과를 받아 판단하는 스킬이다.
+**Head → 작업 지시 → OpenCode 한 세션 → 구조화된 결과 → Head**를 유지한다.
+한 세션 안에서는 모델 요청, 파일 탐색, 수정과 테스트가 여러 번 발생할 수 있다.
 
-## 사용
+## 무엇이 들어 있나
 
-Python 3.10+, Git, macOS/Linux, 기존 OpenCode CLI/provider 인증과 호환되는
-`@opencode-ai/plugin` SDK가 필요하다. [설정 안내](references/lite-v2.md)를 먼저 확인한다.
-한 환경에는 이 Lite v2 스킬만 설치한다.
+| 파일 | 역할 |
+| --- | --- |
+| [SKILL.md](SKILL.md) | 모델이 따르는 한국어 실행 절차와 판단 원칙 |
+| `scripts/lite.py` | 설정·모델 선택·잠금·단일 세션 실행 |
+| `scripts/streaming.py` | JSONL 처리, 활동 타임아웃, 프로세스 정리, 제한된 관측 기록 |
+| `scripts/submission.py` + `assets/submit-result.mjs` | 구조화된 결과 제출과 형식 검증 |
+| `scripts/verification.py` | 선언된 로컬 검증 명령과 관측 종료 코드 대조 |
+| `assets/worker-agent.json` | 도구 권한 프로필. OS 샌드박스가 아님 |
+| `scripts/test_*.py` | 유료 모델을 호출하지 않는 회귀 테스트 |
+
+실행기는 남기되 별도 Planner/Reviewer, 자동 재시도·모델 전환·수정 체인, 전체 스킬 목록 주입은 하지 않는다.
+코드 줄 수와 LLM 사용량은 다른 지표다. 이 구조만으로 절감률을 보장하지 않는다.
+
+## 시작하기
+
+필요한 환경은 **macOS/Linux, Python 3.10+, Git, OpenCode CLI, 기존 provider 인증,
+CLI와 호환되는 `@opencode-ai/plugin` SDK**다. Node.js는 JavaScript 제출 도구 검증에도 필요하다.
+이 스킬만 올린다고 CLI가 없는 ChatGPT 환경에서 실행할 수 있는 것은 아니다.
+자세한 SDK 위치와 설정은 [설정 안내](references/lite-v2.md)를 확인한다. 한 환경에는 이 버전만 설치한다.
+
+스킬 디렉터리에서 최초 모델 설정을 한다. 아래 `<provider/model>`은 실제 사용 가능한 식별자로 바꾼다.
 
 ```sh
 python3 scripts/lite.py models
 python3 scripts/lite.py models <provider>
-python3 scripts/lite.py set-default <provider/model> --variant <supported-variant>
-python3 scripts/lite.py --project /absolute/repo resolve
-python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt --explicit
+python3 scripts/lite.py set-default <provider/model>
 ```
 
-`--model` / `--variant`로 이번 실행을 재정의한다. `--read-only`는 큰 읽기 전용 조사에 사용한다.
-외부 공유 스킬 원문이 필요하면 승인된 정확한 디렉터리에 한해 `--skill-dir`를 추가한다.
-시간 제한은 **활동 기준**이다. OpenCode JSON/event가 `--inactivity-timeout`(기본 300초) 동안
-없을 때만 중단하며, 이벤트가 계속 나오면 총 실행 시간이 길어도 유지한다. 선택적
-`--hard-timeout`(기본 비활성)만 총 경과 시간 상한을 건다.
-설정은 기존 opencode-worker/config.json을 재사용한다. 모델·variant 확인은 설정 시에만 수행하며
-정상 실행은 저장된 route로 OpenCode CLI를 한 번 시작한다. 이는 모델 요청 한 번을 뜻하지 않는다.
+지원되는 실행 강도를 지정할 때만 `--variant <supported-variant>`를 추가한다.
+작업 지시는 별도 UTF-8 파일에 다음 네 항목으로 적는다. 전체 크기는 8 KiB 이하이다.
 
-## 유지한 것과 뺀 것
+```text
+GOAL: 구현할 목표
+PLAN: 이미 결정된 방향
+CONSTRAINTS: 수정 범위와 제한 사항
+DONE WHEN: 완료를 확인할 조건
+```
 
-모델/variant 선택, 프로젝트 override, auto/manual/off, checkout/config 잠금, permission profile,
-구조화 제출과 로컬 검증 명령의 종료 코드 대조를 유지한다. 전역 off는 프로젝트 auto보다 우선한다.
-Reviewer/Planner, 모델 자동 전환, 재실행·수정 체인, 전역 카탈로그 주입, 거대한 실행 증거 저장은 없다.
-`lite.py` 외에 streaming.py, submission.py, verification.py, 제출 plugin과 permission asset을 사용한다.
-줄 수와 바이트 수를 함께 기록한다. 수정 전 Lite 실행 코드 44,493바이트에서 수정 후 48,174바이트로 늘었다.
-고정 작업 패킷은 동일한 예시 입력 기준 657자에서 361자로 줄었다. 어느 쪽도 실제 토큰 절감의 증거는 아니다.
-
-## 결과 해석
-
-stdout에는 작은 JSON 결과만 반환한다. raw JSONL·소스·diff를 Head에 계속 전달하지 않는다.
-`model`/`variant`는 선택한 CLI 설정이며 `observed_model`/`observed_variant`는 현재 null이다.
-실제 사용 모델을 독립 확인했다고 보고하지 않는다. `worker_used`는 세션 관측이며 과금 호출 횟수가 아니다.
-`validation_evidence`는 선언한 명령 exit의 보조 증거다. 요구사항·테스트 품질·원격 완료는 별도 판단한다.
-실패·비정상 종료·누락 제출을 completed로 승격하지 않으며 자동 재실행하지 않는다.
-비활성 타임아웃은 provider 오류·정상 종료와 구분해 `timeout_kind`와 메시지로 보고한다.
-
-## 검증
+대상은 지시 파일만 둔 임시 폴더가 아니라 실제 저장소여야 한다.
 
 ```sh
-python3 -m unittest discover -s scripts -p 'test_lite_v2.py'
-python3 -m unittest discover -s scripts -p 'test_*.py'
+python3 scripts/lite.py --project "/absolute/repo" resolve
+python3 scripts/lite.py --project "/absolute/repo" run --brief "/absolute/task.txt" --explicit
 ```
 
-가짜 CLI/SDK 테스트와 live provider 검증은 구분한다. 설치 ZIP에는 Lite 실행 파일과 전용 테스트를 포함하며,
-검토 결과와 확인하지 못한 항목은 실행 결과에서 구분한다.
+`--project`와 `--config`는 `run` 앞에, 나머지 실행 옵션은 뒤에 둔다.
+정상 `run`은 모델 목록을 재조회하지 않고 저장된 모델로 OpenCode CLI를 한 번 시작한다.
+
+## 자주 쓰는 선택 사항
+
+| 필요 | 옵션 또는 명령 |
+| --- | --- |
+| 이번 실행의 모델·강도 변경 | `run ... --model <provider/model> --variant <variant>` |
+| 파일 수정 없는 조사 | `run ... --read-only` |
+| 알려진 외부 스킬 읽기 | `run ... --skill-dir "/absolute/known-skill"` |
+| 활동 없는 시간 조정 | `run ... --inactivity-timeout 300` |
+| 전체 실행 시간도 제한 | `run ... --hard-timeout 7200` |
+| 새 Worker 실행 차단 | `python3 scripts/lite.py set-mode off` |
+
+`off`는 프로젝트 설정이나 `--explicit`으로 우회할 수 없다. 이미 실행 중인 프로세스를 종료하지는 않는다.
+기본 시간 제한은 유효 이벤트가 없는 300초다. 유효 이벤트가 계속 오면 총 실행 시간에는 기본 상한이 없다.
+
+## 결과를 어디까지 믿을 수 있나
+
+stdout은 압축된 JSON 결과, stderr는 진행 표시다. 진행 표시만으로 성공을 판단하지 않는다.
+**최상위 `status`가 실행 판정**이며, 안쪽 `result.status`는 Worker가 보고한 값이다.
+오류가 발생하면 내부 보고가 `completed`여도 최상위는 `needs_escalation`일 수 있다.
+
+| 정보 | 의미와 한계 |
+| --- | --- |
+| `validation_evidence` | 선언한 로컬 명령의 종료 코드만 대조한다. 구현 품질이나 테스트 개수를 증명하지 않는다. |
+| `partial` / `unverified` | 증거가 부족한 상태다. 실패로 단정하거나 형식만 맞추려 재실행하지 않는다. |
+| `model` / `variant` | CLI에 전달한 선택값이다. 독립 확인값 `observed_*`는 현재 null이다. |
+| `worker_tokens` | OpenCode가 보고한 토큰과 누락 범위다. 실제 청구 금액·Head 사용량과 다르다. |
+
+비정상 종료나 누락·충돌 제출을 완료로 처리하지 않는다. 부분 변경은 보존하고 자동 재실행하지 않는다.
+권한 프로필은 임의 shell/MCP/외부 프로세스를 완전히 격리하는 보안 경계가 아니다.
+SIGTERM·Ctrl-C·타임아웃은 같은 그룹의 자식 정리를 시도하지만 SIGKILL, 그룹을 벗어난 자식,
+호스트의 종료 거부까지 보장하지 않는다. 재실행 전에 남은 실행 상태를 확인한다.
+
+## 검증과 평가
+
+```sh
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
+node --check assets/submit-result.mjs
+```
+
+테스트는 가짜 CLI와 SDK 인터페이스를 사용한다. Node.js가 없으면 JavaScript 계약 테스트가 skipped로 표시된다.
+실제 OpenCode/SDK/provider의 호환성, 코드 품질, Head 토큰 절감은 별도의 실사용 검증이 필요하다.
+
+[스킬 평가 기준](references/skill-evaluation.md)은 자동으로 확인할 수 있는 조건과 LLM 행동 평가를 구분한다.
+[2026-09-23 감사 기록](references/audit-2026-09-23.md)에는 재현한 결함, 수정 범위와 미검증 항목을 남긴다.
