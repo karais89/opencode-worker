@@ -218,7 +218,10 @@ class Summary:
                 'provider_errors':[{'name':e['error']['name'],'status_code':e['error']['data']['statusCode']} for e in self.errors[:5]], 'worker_answer':self.answer, 'summary_truncated':self.truncated,
                 'replay_safe':self.safe, 'malformed_output':self.invalid}
 
-def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_stream=None, progress_heartbeat=PROGRESS_HEARTBEAT_SECONDS):
+def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_stream=None, progress_heartbeat=PROGRESS_HEARTBEAT_SECONDS, inactivity_timeout=None):
+    # timeout is an optional overall wall-clock hard limit (None disables it).
+    # inactivity_timeout interrupts only after this many seconds without a
+    # consumed OpenCode JSON event. Controller heartbeat output never counts.
     summary=Summary(replay_check)
     log=None; log_path=None
     if log_dir:
@@ -271,11 +274,37 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
             selector.register(p.stdout,selectors.EVENT_READ,'stdout')
             selector.register(p.stderr,selectors.EVENT_READ,'stderr')
             buffer=b''; discard=False; stderr_present=False
-            deadline=time.monotonic()+timeout
+            start=time.monotonic()
+            hard_deadline=None if timeout is None else start+timeout
+            active_deadline=None if inactivity_timeout is None else start+inactivity_timeout
+            def deadline_reached():
+                # Hard wall-clock limit first, then the inactivity deadline.
+                for limit,kind in ((hard_deadline,'hard'),(active_deadline,'inactivity')):
+                    if limit is not None and time.monotonic()>=limit: return kind
+                return None
+            def select_window():
+                limits=[x for x in (hard_deadline,active_deadline) if x is not None]
+                if not limits: return 0.25
+                return min(0.25,max(0,min(limits)-time.monotonic()))
+            def wait_timeout():
+                limits=[x for x in (hard_deadline,active_deadline) if x is not None]
+                if not limits: return None
+                return max(.01,min(limits)-time.monotonic())
+            def mark_activity():
+                # Only consumed OpenCode JSON events refresh inactivity. Progress
+                # heartbeat output and stderr are never Worker activity.
+                nonlocal last_event_at,active_deadline
+                last_event_at=time.monotonic()
+                if inactivity_timeout is not None:
+                    active_deadline=last_event_at+inactivity_timeout
             try:
                 while selector.get_map():
-                    if time.monotonic()>=deadline: raise TimeoutError('Worker timeout')
-                    for key,_ in selector.select(min(0.25,max(0,deadline-time.monotonic()))):
+                    kind=deadline_reached()
+                    if kind:
+                        error=TimeoutError('Worker inactivity timeout' if kind=='inactivity' else 'Worker timeout')
+                        error.timeout_kind=kind
+                        raise error
+                    for key,_ in selector.select(select_window()):
                         chunk=os.read(key.fileobj.fileno(),65536)
                         if not chunk:
                             selector.unregister(key.fileobj); continue
@@ -292,15 +321,19 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                             if i<len(segments)-1:
                                 if not discard and buffer.strip():
                                     try:
-                                        summary.consume(json.loads(buffer)); last_event_at=time.monotonic(); show_progress()
+                                        summary.consume(json.loads(buffer)); mark_activity(); show_progress()
                                     except (ValueError,UnicodeError): summary.bad_line()
                                 buffer=b''; discard=False
                     show_progress()
                 if buffer.strip() and not discard:
                     try:
-                        summary.consume(json.loads(buffer)); last_event_at=time.monotonic(); show_progress()
+                        summary.consume(json.loads(buffer)); mark_activity(); show_progress()
                     except (ValueError,UnicodeError): summary.bad_line()
-                rc=p.wait(timeout=max(.01,deadline-time.monotonic()))
+                try:
+                    rc=p.wait(timeout=wait_timeout())
+                except subprocess.TimeoutExpired as error:
+                    error.timeout_kind=deadline_reached() or 'inactivity'
+                    raise
                 completed=True
                 summary._set_progress_phase('process_exited')
                 show_progress(force=True)

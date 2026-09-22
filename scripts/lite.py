@@ -224,8 +224,10 @@ def run_worker(args, data, root, cfg_path):
     source, model, variant = resolve_route(data, root, args.model, args.variant)
     if model is None:
         return dict(status="setup_required", worker_used=False, message="Select a Worker route first.")
-    if not math.isfinite(args.timeout) or args.timeout <= 0:
-        raise Failure("invalid_timeout", "Timeout must be finite and positive.")
+    if not math.isfinite(args.inactivity_timeout) or args.inactivity_timeout <= 0:
+        raise Failure("invalid_timeout", "Inactivity timeout must be finite and positive.")
+    if args.hard_timeout is not None and (not math.isfinite(args.hard_timeout) or args.hard_timeout <= 0):
+        raise Failure("invalid_timeout", "Hard timeout must be finite and positive when set.")
     brief = read_brief(args.brief)
     ignored = {".git", ".DS_Store", "brief.txt", "task.txt", "work", "outputs", Path(args.brief).name}
     if not any(p.name not in ignored for p in Path(root).iterdir()):
@@ -244,14 +246,26 @@ def run_worker(args, data, root, cfg_path):
             cmd += ["--variant", variant]
         started = time.monotonic()
         try:
-            rc, summary, _, _ = streaming.run(cmd, root, args.timeout,
-                make_prompt(root, brief, readonly, skill_dirs), env, lambda _: False, progress_heartbeat=60)
+            rc, summary, _, _ = streaming.run(cmd, root, args.hard_timeout,
+                make_prompt(root, brief, readonly, skill_dirs), env, lambda _: False, progress_heartbeat=60,
+                inactivity_timeout=args.inactivity_timeout)
         except (TimeoutError, subprocess.TimeoutExpired, KeyboardInterrupt, OSError) as error:
             summary = getattr(error, "worker_summary", None)
+            kind = getattr(error, "timeout_kind", None)
             result = result_from_summary(-1, summary, model, variant, source,
                                          time.monotonic() - started, readonly) if summary else {}
-            result.update(status="needs_escalation", worker_process_started=getattr(error, "worker_launched", False),
-                          message="Worker interrupted. Preserve partial changes; child cleanup is not guaranteed by this host. No automatic retry.")
+            if kind == "inactivity":
+                reason = (f"Worker interrupted after {args.inactivity_timeout:g}s with no OpenCode JSON/event activity "
+                          "(inactivity timeout).")
+            elif kind == "hard":
+                reason = f"Worker interrupted by the optional hard overall limit of {args.hard_timeout:g}s."
+            else:
+                reason = "Worker interrupted before normal completion."
+            result.update(status="needs_escalation",
+                          worker_process_started=getattr(error, "worker_launched", False),
+                          timeout_kind=kind,
+                          message=reason + " Preserve partial changes; child cleanup is not guaranteed by this host. "
+                                           "This is not a provider error. No automatic retry.")
             result.setdefault("worker_used", False)
             return result
         return result_from_summary(rc, summary, model, variant, source, time.monotonic() - started, readonly)
@@ -340,7 +354,14 @@ def parser():
     run.add_argument("--explicit", action="store_true")
     run.add_argument("--read-only", action="store_true")
     run.add_argument("--skill-dir", action="append", default=[])
-    run.add_argument("--timeout", type=float, default=1800)
+    # Production timeout policy: interrupt only after sustained event silence.
+    # The old total-time limit is preserved as an explicit optional hard limit,
+    # but disabled by default so long active sessions are not killed.
+    run.add_argument("--inactivity-timeout", type=float, default=300,
+                     help="Interrupt after this many seconds with no OpenCode JSON/event activity (default 300).")
+    run.add_argument("--hard-timeout", "--timeout", dest="hard_timeout", type=float, default=None,
+                     help="Optional overall wall-clock hard limit in seconds; disabled by default. "
+                          "The legacy --timeout total limit is this same explicit hard limit.")
     return p
 
 

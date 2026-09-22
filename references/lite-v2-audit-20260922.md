@@ -58,6 +58,17 @@ P008 main: `326ecff40a5a1864d0124e4e652bb90f76a6f54a`.
 실제 provider 요청, 유료 모델 E2E, Codex 사용량 및 A/B 품질·비용 측정은 실행하지 않았다.
 테스트용 CLI/SDK fixture를 실제 설치된 OpenCode와의 호환성 증명으로 취급하지 않는다.
 
+## 타임아웃 정책 갱신 (activity-based)
+
+관측 결과 총 600초를 넘겨도 OpenCode JSON/event가 계속 나오는 유효 실행이 컨트롤러의
+600초 총 제한으로 잘못 중단됐다. 이에 Lite v2의 시간 제한을 총 경과 시간에서 **이벤트 활동
+기준**으로 바꿨다. `--inactivity-timeout`(기본 300초) 동안 소비된 OpenCode JSON/event가
+없을 때만 중단하고, 이벤트가 도착하면 단조 시계 기준 비활성 마감을 갱신한다. 컨트롤러의
+stderr 진행/heartbeat 출력은 활동으로 세지 않는다. 이전 `--timeout` 총 제한은 기본 비활성인
+선택적 `--hard-timeout`으로 분리했다. 비활성 중단은 `timeout_kind=inactivity`로 provider
+오류·정상 종료와 구분하며 부분 변경 보존과 무자동재실행은 유지한다. 구조·prompt·권한·라우팅·
+fallback·retry·CLI의 나머지 동작은 바꾸지 않았고 Full 경로도 바꾸지 않았다.
+
 ## 남은 제한
 
 1. WebJjonku 샌드박스가 테스트용 외부 `.env` 생성을 거부한다. 보호 정책을 풀거나 테스트를 삭제/skip하지 않았다.

@@ -26,6 +26,10 @@ python3 <this-skill>/scripts/lite.py --project /absolute/repo run --brief /absol
 명시적 위임 요청에는 `--explicit`을 붙인다. 설정된 provider 사용에 대해 대화형 동의를 중복 요구하지 않는다.
 호스트가 별도 보안 승인을 요구하면 정상 권한 UI를 사용하고 거부를 우회하지 않는다.
 
+시간 제한은 **활동 기준**이다. OpenCode JSON/event가 `--inactivity-timeout`(기본 300초) 동안
+없을 때만 중단하고, 이벤트가 계속 나오면 총 실행이 길어도 유지한다. 컨트롤러 진행/heartbeat는
+활동이 아니다. 총 경과 상한이 필요할 때만 명시적으로 `--hard-timeout`을 쓴다(기본 비활성).
+
 모델은 **이번 `--model` → 프로젝트 route → writer_default/default** 순서다.
 variant는 이번 `--variant`가 우선이고 없으면 선택 모델의 저장 variant를 사용한다.
 설정이 없으면 멈추며 OpenCode 기본 모델로 몰래 대체하지 않는다.

@@ -20,6 +20,9 @@ python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt 
 
 `--model` / `--variant`로 이번 실행을 재정의한다. `--read-only`는 큰 읽기 전용 조사에 사용한다.
 외부 공유 스킬 원문이 필요하면 승인된 정확한 디렉터리에 한해 `--skill-dir`를 추가한다.
+시간 제한은 **활동 기준**이다. OpenCode JSON/event가 `--inactivity-timeout`(기본 300초) 동안
+없을 때만 중단하며, 이벤트가 계속 나오면 총 실행 시간이 길어도 유지한다. 선택적
+`--hard-timeout`(기본 비활성)만 총 경과 시간 상한을 건다.
 설정은 기존 opencode-worker/config.json을 재사용한다. 모델·variant 확인은 설정 시에만 수행하며
 정상 실행은 저장된 route로 OpenCode CLI를 한 번 시작한다. 이는 모델 요청 한 번을 뜻하지 않는다.
 
@@ -41,6 +44,7 @@ stdout에는 작은 JSON 결과만 반환한다. raw JSONL·소스·diff를 Head
 실제 사용 모델을 독립 확인했다고 보고하지 않는다. `worker_used`는 세션 관측이며 과금 호출 횟수가 아니다.
 `validation_evidence`는 선언한 명령 exit의 보조 증거다. 요구사항·테스트 품질·원격 완료는 별도 판단한다.
 실패·비정상 종료·누락 제출을 completed로 승격하지 않으며 자동 재실행하지 않는다.
+비활성 타임아웃은 provider 오류·정상 종료와 구분해 `timeout_kind`와 메시지로 보고한다.
 
 ## 검증
 

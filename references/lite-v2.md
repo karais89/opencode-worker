@@ -1,7 +1,7 @@
 # Lite v2 설정과 한계
 
 ## 목차
-환경 · 모델 설정 · 모드와 공유 스킬 · 결과 의미 · 생략한 기능 · 검증
+환경 · 모델 설정 · 모드와 공유 스킬 · 결과 의미 · 타임아웃 정책 · 생략한 기능 · 검증
 
 ## 환경
 
@@ -82,8 +82,30 @@ validation_commands는 마지막 로컬 검증의 직접 실행 명령을 최대
 형식만 맞추려고 검증을 반복하지 않는다. observed_pass는 선언 명령의 exit 0 관측까지만 뜻한다.
 프로세스 종료, 테스트 개수, 요구사항 충족, 원격 작업 완료를 혼동하지 않는다.
 
-타임아웃 때는 실행 중단과 부분 변경을 보고한다. 호스트가 자식 프로세스 종료를 막으면 정리를 보장할 수 없다.
-자동 재실행하지 말고 남은 실행 상태를 먼저 확인한다. 권한 프로필을 샌드박스로 설명하지 않는다.
+## 타임아웃 정책
+
+시간 제한은 절대 경과 시간이 아니라 **이벤트 활동 기준**이다. OpenCode JSON/event가
+`--inactivity-timeout`(기본 300초) 동안 하나도 소비되지 않을 때만 Worker를 중단한다.
+단조 시계(`time.monotonic`)로 마지막 활동 이후 시간을 재며, 정상 도구/모델 이벤트가
+도착할 때마다 비활성 마감이 갱신된다. 따라서 OpenCode 이벤트가 계속 나오는 한 총 실행
+시간이 길어도(예: 600초 초과) 중단하지 않는다. 컨트롤러의 stderr 진행/heartbeat 출력은
+활동이 아니므로 비활성 타이머를 초기화하지 않는다.
+
+```sh
+python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt
+python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt --inactivity-timeout 300
+python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt --hard-timeout 7200
+```
+
+`--hard-timeout`은 명시적으로 지정할 때만 켜지는 선택적 총 경과 시간 상한이며 기본값은
+없음(비활성)이다. 기존 `--timeout`은 같은 hard limit의 별칭으로 남겨 명시적으로 지정하면
+동일하게 총 상한으로 동작한다. 다만 기본값은 더 이상 1800초 총 제한이 아니므로 활성 세션이
+600초에 종료되지 않는다. `--inactivity-timeout`과 `--hard-timeout` 모두 유한한 양수여야 한다.
+
+비활성 타임아웃은 provider 오류나 정상 프로세스 종료와 구분해 `timeout_kind`와 메시지로
+보고한다. 비활성 중단 때도 부분 변경을 보존하고 자동 재실행하지 않는다. 호스트가 자식
+프로세스 종료를 막으면 정리를 보장할 수 없다. 남은 실행 상태를 먼저 확인한다.
+권한 프로필을 샌드박스로 설명하지 않는다.
 
 ## 생략한 기능
 

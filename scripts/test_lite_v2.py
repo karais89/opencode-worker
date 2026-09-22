@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -66,7 +67,7 @@ class LiteV2Tests(unittest.TestCase):
 
     def args(self, **extra):
         values = dict(brief=str(self.brief), model=None, variant=None, explicit=False,
-                      timeout=10, read_only=False, skill_dir=[])
+                      inactivity_timeout=300, hard_timeout=None, read_only=False, skill_dir=[])
         values.update(extra)
         return SimpleNamespace(**values)
 
@@ -131,13 +132,98 @@ class LiteV2Tests(unittest.TestCase):
         error = TimeoutError("fixture")
         error.worker_summary = summary(events())
         error.worker_launched = True
+        error.timeout_kind = "inactivity"
         with patch.object(lite, "worker_env", return_value={}), patch.object(lite.streaming, "run", side_effect=error) as run:
             result = lite.run_worker(self.args(), self.data, str(self.root), self.cfg)
         self.assertEqual(run.call_count, 1)
         self.assertEqual(result["status"], "needs_escalation")
         self.assertEqual(result["result"]["changed"], ["main.py"])
         self.assertTrue(result["worker_process_started"])
+        self.assertEqual(result["timeout_kind"], "inactivity")
+        self.assertIn("inactivity timeout", result["message"])
+        self.assertIn("not a provider error", result["message"])
         self.assertIn("not guaranteed", result["message"])
+
+    def test_inactivity_timeout_is_distinct_from_provider_error_and_normal_exit(self):
+        # Provider error events still classify through the summary, not as timeout.
+        provider = self.result(events() + [dict(type="error", error=dict(name="APIError", data=dict(statusCode=500)))])
+        self.assertEqual(provider["status"], "needs_escalation")
+        self.assertNotIn("timeout_kind", provider)
+        # A normal completed run has no timeout marker.
+        self.assertNotIn("timeout_kind", self.result())
+        self.assertEqual(self.result()["status"], "completed")
+
+    def test_hard_timeout_message_is_distinct(self):
+        error = TimeoutError("fixture")
+        error.worker_summary = summary(events())
+        error.worker_launched = True
+        error.timeout_kind = "hard"
+        with patch.object(lite, "worker_env", return_value={}), patch.object(lite.streaming, "run", side_effect=error):
+            result = lite.run_worker(self.args(hard_timeout=600), self.data, str(self.root), self.cfg)
+        self.assertEqual(result["timeout_kind"], "hard")
+        self.assertIn("hard overall limit", result["message"])
+
+    def test_streaming_inactivity_timeout_terminates_silent_process(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe = Path(t) / "opencode"
+            exe.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
+            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            with self.assertRaises(TimeoutError) as caught:
+                streaming.run(["run"], t, None, "task", env, lambda _: False,
+                              inactivity_timeout=0.3, progress_stream=False, progress_heartbeat=0)
+            self.assertEqual(getattr(caught.exception, "timeout_kind", None), "inactivity")
+
+    def test_streaming_activity_refreshes_deadline_beyond_inactivity_window(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe = Path(t) / "opencode"
+            exe.write_text(
+                "#!/usr/bin/env python3\nimport json,time\n"
+                "for i in range(4):\n"
+                "    print(json.dumps({'type':'text','sessionID':'s','part':{'text':'step'}}),flush=True)\n"
+                "    time.sleep(0.2)\n"
+                "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
+                "'tokens':{'input':1,'output':1,'total':2}}}),flush=True)\n")
+            exe.chmod(0o700)
+            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            started = time.monotonic()
+            rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
+                                              inactivity_timeout=0.5, progress_stream=False, progress_heartbeat=0)
+            elapsed = time.monotonic() - started
+            self.assertEqual(rc, 0)
+            self.assertGreater(elapsed, 0.5)  # total exceeded the inactivity window while active
+            self.assertEqual((summary.last_finish or {}).get("part", {}).get("reason"), "stop")
+
+    def test_streaming_progress_heartbeat_does_not_reset_inactivity(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe = Path(t) / "opencode"
+            exe.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
+            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            progress = io.StringIO()
+            with self.assertRaises(TimeoutError) as caught:
+                streaming.run(["run"], t, None, "task", env, lambda _: False,
+                              progress_stream=progress, progress_heartbeat=0.05, inactivity_timeout=0.25)
+            self.assertEqual(getattr(caught.exception, "timeout_kind", None), "inactivity")
+            # The controller heartbeat printed but was not treated as Worker activity.
+            self.assertIn("last_event=none", progress.getvalue())
+
+    def test_streaming_normal_completion_and_provider_error_are_not_timeouts(self):
+        with tempfile.TemporaryDirectory() as t:
+            exe = Path(t) / "opencode"
+            exe.write_text("#!/usr/bin/env python3\nimport json\n"
+                           "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
+                           "'tokens':{'input':1,'output':1,'total':2}}}))\n")
+            exe.chmod(0o700)
+            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
+                                              inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
+            self.assertEqual(rc, 0)
+            self.assertEqual((summary.last_finish or {}).get("part", {}).get("reason"), "stop")
+            exe.write_text("#!/usr/bin/env python3\nimport json\n"
+                           "print(json.dumps({'type':'error','error':{'name':'APIError','data':{'statusCode':500}}}))\n")
+            rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
+                                              inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
+            self.assertEqual(rc, 0)
+            self.assertEqual(summary.errors[0]["error"]["name"], "APIError")
 
     def test_error_after_accepted_report_is_not_completed(self):
         items = events() + [dict(type="error", error=dict(name="APIError", data=dict(statusCode=500)))]
@@ -224,8 +310,23 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_invalid_timeout_is_rejected_before_launch(self):
         for value in (0, -1, float("inf"), float("nan")):
-            with self.subTest(timeout=value), self.assertRaises(lite.Failure):
-                lite.run_worker(self.args(timeout=value), self.data, str(self.root), self.cfg)
+            with self.subTest(inactivity_timeout=value), self.assertRaises(lite.Failure):
+                lite.run_worker(self.args(inactivity_timeout=value), self.data, str(self.root), self.cfg)
+        for value in (0, -1, float("inf"), float("nan")):
+            with self.subTest(hard_timeout=value), self.assertRaises(lite.Failure):
+                lite.run_worker(self.args(hard_timeout=value), self.data, str(self.root), self.cfg)
+
+    def test_default_timeout_policy_is_inactivity_based_and_disables_hard_limit(self):
+        parsed = lite.parser().parse_args(["run", "--brief", str(self.brief)])
+        self.assertEqual(parsed.inactivity_timeout, 300)
+        self.assertIsNone(parsed.hard_timeout)
+        legacy = lite.parser().parse_args(["run", "--brief", str(self.brief), "--timeout", "7200"])
+        self.assertEqual(legacy.hard_timeout, 7200)
+        with patch.object(lite, "worker_env", return_value={}), \
+             patch.object(lite.streaming, "run", return_value=(0, summary(events()), False, None)) as run:
+            lite.run_worker(self.args(), self.data, str(self.root), self.cfg)
+        self.assertEqual(run.call_args.kwargs.get("inactivity_timeout"), 300)
+        self.assertIsNone(run.call_args.args[2])
 
     def test_permission_profile_readonly_and_shared_originals(self):
         with patch.object(submission, "configure", side_effect=lambda env: None):
