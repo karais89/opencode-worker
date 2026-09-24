@@ -175,7 +175,8 @@ def worker_env(read_only=False, skill_dirs=()):
 
 
 def read_brief(path):
-    raw = Path(path).expanduser().resolve().read_bytes()
+    with Path(path).expanduser().resolve().open("rb") as source:
+        raw = source.read(8193)
     if not raw.strip() or len(raw) > 8192:
         raise Failure("invalid_brief", "Supply a nonempty UTF-8 brief at or below 8 KiB.")
     return raw.decode("utf-8").strip()
@@ -198,7 +199,8 @@ def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=
     evidence = verification.assess(report or {}, public)
     normal_stop = (summary.last_finish or {}).get("part", {}).get("reason") == "stop"
     problem = None
-    if rc != 0 or summary.errors or summary.denied or public.get("malformed_output") or not normal_stop:
+    if (rc != 0 or summary.errors or summary.denied or public.get("malformed_output")
+            or public.get("pending_tools") or not normal_stop):
         problem = "Execution failed, was denied, or has no verified normal stop. Do not replay automatically."
     elif not public.get("session_id") or capture.get("error") or not report:
         problem = "A valid session-bound structured result is unavailable. Do not infer completion from prose."
@@ -235,8 +237,10 @@ def run_worker(args, data, root, cfg_path):
     skill_dirs = []
     for raw in getattr(args, "skill_dir", []):
         p = Path(raw).expanduser().resolve()
-        if not p.is_dir() or not (p / "SKILL.md").is_file() or p in (Path.home().resolve(), Path(p.anchor)):
-            raise Failure("invalid_skill_dir", "Supply an explicitly authorized, known Skill directory.")
+        if (not p.is_dir() or not (p / "SKILL.md").is_file()
+                or p in (Path.home().resolve(), Path(p.anchor))
+                or any(char in str(p) for char in "*?")):
+            raise Failure("invalid_skill_dir", "Supply an authorized, known Skill directory without wildcard characters (* or ?).")
         skill_dirs.append(str(p))
     readonly = getattr(args, "read_only", False)
     with checkout_lock(root, cfg_path):

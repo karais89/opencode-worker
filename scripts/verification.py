@@ -58,12 +58,11 @@ def assess(report, attempt):
             continue
         record = max(matches, key=lambda r: r['sequence'])
         code = record.get('exit')
-        if type(code) is not int:
-            continue
-        if code != 0 or record.get('tool_status') == 'error':
+        if record.get('tool_status') == 'error' or (type(code) is int and code != 0):
             result['failed'] += 1
             result['unverified'] -= 1
-        elif (record.get('tool_status') == 'completed' and barrier is not None
+        elif (type(code) is int and code == 0
+              and record.get('tool_status') == 'completed' and barrier is not None
               and type(record.get('sequence')) is int and record['sequence'] > barrier):
             result['passed'] += 1
             result['unverified'] -= 1

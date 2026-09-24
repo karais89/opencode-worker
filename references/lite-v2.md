@@ -54,11 +54,14 @@ python3 scripts/lite.py --project /absolute/repo set-mode manual --project-only
 python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
 ```
 
-전역 off는 절대 중단이며 프로젝트 auto로 되살아나지 않는다.
-그 외에는 프로젝트 모드가 전역 모드를 상속/재정의한다. manual은 --explicit이 필요하다.
+전역 `off`는 새 Worker 실행을 차단하며 프로젝트 `auto`로 되살아나지 않는다.
+이미 실행 중인 프로세스를 종료하는 기능은 아니다.
+그 외에는 프로젝트 모드가 전역 모드를 상속/재정의한다. `manual`은 `--explicit`이 필요하다.
+`auto`는 런처의 실행 허용 모드다. 스킬의 사용 조건을 무시하고 모든 코딩 요청을 자동 위임한다는 뜻이 아니다.
 
 실행에는 반드시 --project를 지정한다. 읽기 전용 조사는 --read-only, 필요하고 승인된 외부 스킬 원문은
 --skill-dir /absolute/known-skill로 지정한다. 경로에는 실제 SKILL.md가 있어야 하며 원문 수정은 금지된다.
+정규화한 경로에 `*` 또는 `?`가 있으면 중단한다. 정확한 경로가 권한 패턴으로 확대되는 것을 막기 위해서다.
 자동 전체 카탈로그 탐색, 전역 설정 조사, 누락된 도구 자동 설치는 하지 않는다.
 원래 `.agents/worker-capabilities.json` 자동 발견과 광범위 공유 스킬 자동 허용은 이식하지 않았다.
 특정 CLI/MCP/Editor가 실제 연결됐는지는 별개다. 필요한 도구가 없으면 blocker로 보고한다.
@@ -70,7 +73,11 @@ python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
 ## 결과 의미
 
 결과 제출 schema와 1,800자 제한은 기존 제출 모듈을 재사용한다. 제출 뒤 개발 도구 호출이 있으면 결과가 무효다.
-오류/거부/정상 stop 없음/누락 또는 충돌 제출은 needs_escalation이다. 부분 report는 진단용으로 보존한다.
+최상위 `status`가 실행 판정이다. `result.status`는 Worker의 제출값이므로 단독으로 믿지 않는다.
+오류·거부·정상 stop 없음·미종료 도구·누락 또는 충돌 제출은 `needs_escalation`이다.
+새 `step_start`나 도구 이벤트가 오면 이전 stop은 더 이상 정상 종료 근거가 아니다.
+세션 이벤트에는 동일한 유효 sessionID가 필요하며, 세션 생성 전 오류만 ID 생략을 허용한다.
+부분 report는 유효하게 수집된 경우 진단용으로 보존한다.
 CLI 한 번 실행은 모델 요청 한 번이 아니다. 세션 내 탐색·도구·모델 요청은 여러 번 발생할 수 있다.
 
 model, variant는 선택한 CLI 인자다. 현재 CLI JSONL만으로 모델 정체성을 독립 확인하지 못하므로
@@ -80,16 +87,23 @@ observed_model과 observed_variant는 null이다. 추가 export/debug/모델 호
 validation_commands는 마지막 로컬 검증의 직접 실행 명령을 최대 10개 선언한다.
 복합 shell·기록 누락·변경 전 검사·원격/MCP는 unverified일 수 있다. 이를 실패로 단정하거나
 형식만 맞추려고 검증을 반복하지 않는다. observed_pass는 선언 명령의 exit 0 관측까지만 뜻한다.
+선언된 검증 도구의 상태가 `error`이면 exit 코드가 없어도 실패다. 반대로 완료된 명령의
+exit가 없으면 `unverified`이며, 이를 성공이나 실패로 추측하지 않는다.
+최근 10개 명령만 결과 대조에 사용하지만 호출 ID는 최대 10,000개까지 기억한다.
+오래된 이벤트의 중복 수신을 새 검증으로 세지 않는다. 추적 한도 초과·충돌은 완료 판정을 차단한다.
 프로세스 종료, 테스트 개수, 요구사항 충족, 원격 작업 완료를 혼동하지 않는다.
 
 ## 타임아웃 정책
 
-시간 제한은 절대 경과 시간이 아니라 **이벤트 활동 기준**이다. OpenCode JSON/event가
+시간 제한은 절대 경과 시간이 아니라 **유효한 이벤트 활동 기준**이다. OpenCode JSON/event가
 `--inactivity-timeout`(기본 300초) 동안 하나도 소비되지 않을 때만 Worker를 중단한다.
 단조 시계(`time.monotonic`)로 마지막 활동 이후 시간을 재며, 정상 도구/모델 이벤트가
 도착할 때마다 비활성 마감이 갱신된다. 따라서 OpenCode 이벤트가 계속 나오는 한 총 실행
 시간이 길어도(예: 600초 초과) 중단하지 않는다. 컨트롤러의 stderr 진행/heartbeat 출력은
 활동이 아니므로 비활성 타이머를 초기화하지 않는다.
+숫자·빈 객체·알 수 없는 유형·다른 세션의 출력도 활동으로 인정하지 않는다.
+현재 처리하는 유형은 `step_start`, `step_finish`, `text`, `reasoning`, `tool_use`, `error`다.
+CLI가 새로운 유형을 추가하면 완료 판정을 차단하므로, 해당 버전의 실제 이벤트를 검토하고 지원을 추가한다.
 
 ```sh
 python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt
@@ -105,6 +119,9 @@ python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt 
 비활성 타임아웃은 provider 오류나 정상 프로세스 종료와 구분해 `timeout_kind`와 메시지로
 보고한다. 비활성 중단 때도 부분 변경을 보존하고 자동 재실행하지 않는다. 호스트가 자식
 프로세스 종료를 막으면 정리를 보장할 수 없다. 남은 실행 상태를 먼저 확인한다.
+일반 CLI의 SIGTERM도 Ctrl-C와 같은 정리 경로로 처리하고 기존 신호 핸들러를 복원한다.
+메인 스레드에서만 신호 핸들러를 설치한다. SIGKILL, 다른 프로세스 그룹으로 이탈한 자식,
+호스트가 거부하는 종료까지 보장하지 않는다. 별도 스레드에서 라이브러리로 실행할 때는 호스트가 종료를 관리한다.
 권한 프로필을 샌드박스로 설명하지 않는다.
 
 ## 생략한 기능
@@ -121,3 +138,5 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 테스트는 가짜 CLI/SDK와 실제 JSONL 처리 경로를 사용한다. 실제 provider 통합·품질·사용량 절감을 입증하지 않는다.
+Node.js가 없으면 JavaScript 제출 계약 테스트는 건너뛰므로 skipped 수를 확인한다.
+비용을 쓰지 않는 회귀 검사와 실사용 평가는 [스킬 평가 기준](skill-evaluation.md)에서 구분한다.

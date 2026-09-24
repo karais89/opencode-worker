@@ -1,64 +1,83 @@
 ---
 name: opencode-worker
-description: Codex/ChatGPT Head가 목표와 정확한 저장소를 정하고 OpenCode Worker 한 세션에 구현, 다중 파일 변경, 버그 수정, 테스트 및 디버깅을 위임한다. 큰 읽기 전용 코드 조사도 지원한다. $opencode-worker 또는 명시적인 OpenCode 위임 요청에 사용한다. 단순 질문, 설계만 필요한 요청, 아주 작은 편집과 Worker 사용 거부에는 사용하지 않는다.
+description: Codex/ChatGPT가 구현·다중 파일 수정·버그 수정·테스트·디버깅 또는 큰 읽기 전용 코드 조사를 OpenCode Worker 한 세션에 위임한다. 사용자가 $opencode-worker를 지정하거나 OpenCode에 작업을 맡기라고 명시한 경우 사용한다. 단순 질문, 설계만 필요한 요청, 아주 작은 편집, Worker 사용을 거부한 요청에는 사용하지 않는다.
 ---
 
-# OpenCode Worker Lite v2
+# OpenCode Worker — 실행과 판단
 
-**Head → 짧은 작업 지시 → OpenCode 한 세션 → 압축 결과 → Head 판단**을 유지한다.
-`lite.py`는 설정·잠금·실행·결과 관측만 담당한다.
-별도 Planner/Reviewer, 모델 자동 전환, 자동 재실행·수정 체인을 만들지 않는다.
-**1회는 OpenCode CLI 실행/세션 수다.** 세션 안의 모델 요청·도구 호출·테스트 수정은 여러 번일 수 있다.
+**Head의 계획 → 짧은 작업 지시 → Worker 한 세션 → 압축 결과 → Head의 판단**을 유지한다.
+`lite.py`는 설정·잠금·실행·결과 수집만 담당한다. 별도 Planner/Reviewer, 자동 모델 전환,
+재실행·수정 체인을 추가하지 않는다. 한 세션 안의 모델 요청과 도구 호출은 여러 번일 수 있다.
 
-## 계획과 대상
+## 1. 대상과 완료 조건 정하기
 
-사용자 요구, 중요한 설계 결정, 제약, 완료 조건을 짧게 정한다. 이미 확인한 정보만 사용하고
-Worker가 할 구현 탐색을 먼저 반복하지 않는다. 정확한 실제 저장소 루트를 확인한다.
-홈·상위 폴더를 뒤져 프로젝트를 추측하지 않는다. 빈 폴더나 작업 지시 파일만 있는 scratch는 실행 대상이 아니다.
-기존 사용자 변경을 보존한다. brief에는 GOAL / PLAN / CONSTRAINTS / DONE WHEN만 자기완결적으로 적는다.
+확인된 실제 저장소의 절대 경로를 사용한다. 홈·상위 폴더를 뒤져 대상을 추측하지 않는다.
+빈 폴더나 지시 파일만 있는 임시 폴더는 대상이 아니다. 기존 사용자 변경을 보존한다.
+Worker가 할 코드 탐색을 Head가 먼저 반복하지 말고, 이미 아는 정보로 지시 파일을 작성한다.
 
-## 실행
-
-```sh
-python3 <this-skill>/scripts/lite.py --project /absolute/repo run --brief /absolute/brief.txt
+```text
+GOAL: 달성할 목표
+PLAN: 이미 결정된 핵심 방향
+CONSTRAINTS: 작업 범위와 지켜야 할 제약
+DONE WHEN: 확인 가능한 완료 조건
 ```
 
-명시적 위임 요청에는 `--explicit`을 붙인다. 설정된 provider 사용에 대해 대화형 동의를 중복 요구하지 않는다.
-호스트가 별도 보안 승인을 요구하면 정상 권한 UI를 사용하고 거부를 우회하지 않는다.
+지시는 자기완결적인 UTF-8 파일로 저장하고 **8 KiB 이하**로 유지한다.
+대상이 불명확하면 임의 대체하지 말고 확인한다.
 
-시간 제한은 **활동 기준**이다. OpenCode JSON/event가 `--inactivity-timeout`(기본 300초) 동안
-없을 때만 중단하고, 이벤트가 계속 나오면 총 실행이 길어도 유지한다. 컨트롤러 진행/heartbeat는
-활동이 아니다. 총 경과 상한이 필요할 때만 명시적으로 `--hard-timeout`을 쓴다(기본 비활성).
+## 2. Worker 실행하기
 
-모델은 **이번 `--model` → 프로젝트 route → writer_default/default** 순서다.
-variant는 이번 `--variant`가 우선이고 없으면 선택 모델의 저장 variant를 사용한다.
-설정이 없으면 멈추며 OpenCode 기본 모델로 몰래 대체하지 않는다.
-정상 실행에는 모델 목록 조회가 없다. 최초 설정·변경 때만 [설정 안내](references/lite-v2.md)를 읽는다.
-전역 `off`는 프로젝트 설정과 `--explicit`으로도 우회하지 않는다. `manual`은 명시적 요청만 허용한다.
+아래 자리표시자를 실제 경로로 바꾼다. 명시적인 위임 요청에는 `--explicit`을 붙인다.
 
-큰 **읽기 전용 조사**에는 `--read-only`를 사용한다. native read/glob/grep/list와 결과 제출만 허용하며
-shell·테스트·수정·임의 MCP는 금지한다. 결과는 changed=[]와 파일/줄 근거, 미확인 사항으로 받는다.
-실행이 필요한 조사를 읽기 전용으로 완수했다고 주장하지 않는다.
+```sh
+python3 "<this-skill>/scripts/lite.py" --project "/absolute/repo" \
+  run --brief "/absolute/brief.txt" --explicit
+```
 
-외부 공유 스킬 원문이 실제로 필요한 경우에만, 이미 알고 있고 사용이 승인된 정확한 스킬 디렉터리를
-`--skill-dir /absolute/known-skill`로 지정한다. 읽기만 허용하며 전역 스킬 카탈로그를 먼저 스캔하지 않는다.
-일반 Writer의 프로젝트 도구·shell·테스트·빌드 능력은 유지한다. 권한 profile은 OS 샌드박스가 아니다.
-동일 checkout의 잠금을 삭제하거나 다른 config로 우회하지 않는다.
+설정된 provider 사용에 대한 동의를 반복해서 묻지 않는다. 호스트가 요구하는 보안 승인은
+정상 UI로 받고 거부를 우회하지 않는다. 필수 CLI·인증·SDK가 없으면 차단 사유를 보고한다.
 
-## 결과와 실패
+| 상황 | 적용할 규칙 |
+| --- | --- |
+| 모델 선택 | `--model` → 프로젝트 설정 → `writer_default` → `default` 순서다. |
+| 실행 강도 선택 | `--variant`가 우선이고, 없으면 선택 모델에 저장된 값을 쓴다. |
+| 실행 모드 | 전역 `off`는 항상 차단한다. `manual`은 `--explicit`이 필요하다. |
+| 읽기 전용 조사 | `--read-only`를 붙인다. read/glob/grep/list와 제출만 허용한다. |
+| 외부 스킬 원문 | 승인된 정확한 경로만 `--skill-dir`로 읽는다. 원본은 수정하지 않는다. |
 
-Worker는 마지막 개발/검증 뒤 `codex_worker_submit_result`를 호출한다. 제출 형식 오류만 같은 세션에서 고친다.
-자연어 마지막 답변을 기계 프로토콜로 파싱하지 않는다. 실행 오류·거부·비정상 종료·제출 실패는 완료가 아니다.
-부분 변경을 보존하고 자동 재실행하지 않는다. 사용자가 후속 수정을 명시하면 별도의 새 작업으로 다룬다.
+설정이 없으면 멈춘다. 정상 실행 중 모델 목록을 다시 조회하지 않는다.
+최초 설정이나 변경이 필요할 때만 [설정 안내](references/lite-v2.md)를 읽는다.
+읽기 전용 모드에서는 shell·테스트·수정·임의 MCP를 실행하지 않고, `changed=[]`와 파일/줄 근거를 받는다.
+외부 스킬 경로에는 실제 `SKILL.md`가 있어야 하며 `*`, `?`를 넣지 않는다. 전역 스킬 목록을 스캔하지 않는다.
+일반 Worker의 프로젝트 도구·shell·테스트·빌드는 유지하되 권한 프로필을 OS 샌드박스로 믿지 않는다.
+동일 저장소의 잠금을 삭제하거나 다른 config로 중복 실행하지 않는다.
 
-Head는 요구사항과 result의 changed / validation / risk를 대조한다. 전체 소스·diff·테스트를 습관적으로 반복하지 않는다.
-구체적 불일치·검증 실패·요구사항 누락·고위험 변경에만 좁게 확인한다.
-`validation_evidence`는 선언한 로컬 명령 종료 코드의 관측일 뿐 테스트 개수·품질·원격 완료 증명이 아니다.
-partial/unverified는 무조건 실패가 아니다. 증거 형식을 맞추려고 정상 검증을 다시 시키지 않는다.
+## 3. 종료와 실패 처리하기
 
-## 보고
+유효한 OpenCode 이벤트가 **300초간 없으면** 중단한다(`--inactivity-timeout`).
+진행 메시지·heartbeat·무관한 JSON은 활동이 아니다. 총 실행 상한은 기본으로 두지 않으며,
+필요한 경우에만 `--hard-timeout`을 명시한다. 중단 뒤 남은 프로세스가 없는지 확인하기 전 재실행하지 않는다.
 
-구현 결과, 실제 확인한 검증, 남은 위험을 보고한다. stderr 진행 정보는 관측한 단계/개수일 뿐 성공 판정이 아니다.
-`model` / `variant`는 **CLI에 지정한 설정값**이다. `observed_model` / `observed_variant`가 null이면
-실제 모델을 독립 확인했다고 말하지 않는다. session_id도 과금된 모델 호출 횟수의 증거는 아니다.
-시간은 관측값만, 토큰은 provider-reported 수치와 누락 범위를 함께 사용한다. 절감률을 추측하지 않는다.
+Worker는 최종 검증 뒤 `codex_worker_submit_result`로 제출한다. 제출 후 개발 도구를 호출하지 않는다.
+제출 형식 오류만 같은 세션에서 고친다. 마지막 자연어 답변을 완료 신호로 파싱하지 않는다.
+**최상위 `status`를 우선한다.** `needs_escalation`이면 안쪽 `result.status`가 `completed`여도 완료로 보고하지 않는다.
+오류·거부·비정상 종료·검증 실패를 숨기지 않고 부분 변경을 보존한다. 자동 재실행하지 않는다.
+사용자가 후속 수정을 명시하면 새로운 작업으로 처리한다.
+
+## 4. 결과를 필요한 만큼 확인하기
+
+요구사항을 `result.changed`, `validation`, `risk`와 대조한다. 전체 소스·diff·테스트를 습관적으로 반복하지 않는다.
+구체적 불일치, 검증 실패, 요구사항 누락, 고위험 변경이 있을 때만 해당 부분을 추가 확인한다.
+
+`validation_evidence.status=observed_pass`는 **선언한 명령의 exit 0을 관측했다**는 뜻이다.
+테스트 개수·품질·요구사항 충족·원격 완료까지 증명하지 않는다. `partial`·`unverified`를 실패로 단정하지 말고,
+증거 형식만 맞추려고 정상 검증을 다시 시키지 않는다. 실행하지 않은 검증은 미확인으로 남긴다.
+
+## 5. 사용자에게 보고하기
+
+**변경한 것 / 실제 검증한 것 / 남은 위험**을 짧게 보고한다. 진행 메시지나 도구 개수로 성공을 판정하지 않는다.
+`model`·`variant`는 CLI 설정값이다. `observed_model`·`observed_variant`가 null이면 실제 모델을 독립 확인했다고 말하지 않는다.
+`session_id`는 과금 횟수가 아니다. 시간은 관측값만, 토큰은 provider 보고값과 누락 범위를 함께 제시한다.
+측정하지 않은 비용·토큰 절감률을 추측하지 않는다.
+
+스킬 자체를 개선·평가할 때만 [평가 기준](references/skill-evaluation.md)을 읽는다.

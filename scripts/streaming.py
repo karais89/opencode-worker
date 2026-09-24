@@ -9,10 +9,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 MAX_LINE = 4 * 1024 * 1024
 PROGRESS_HEARTBEAT_SECONDS = 60
+MAX_TRACKED_CALLS = 10000
+EVENT_TYPES = ("step_start", "step_finish", "text", "reasoning", "tool_use", "error")
 
 def _looks_like_validation(command):
     text=' '+str(command).lower()+' '
@@ -35,6 +38,8 @@ class Summary:
         self.tool_call_status = {}
         self.files = []
         self.commands = []
+        self.command_history = {}
+        self.pending_tools = set()
         self.command_sequence = 0
         self.activity_sequence = 0
         self.last_non_shell_activity = 0
@@ -95,25 +100,33 @@ class Summary:
 
     def consume(self, event):
         if not isinstance(event, dict):
-            self.bad_line(); return
+            self.bad_line(); return False
         try:
             self.safe = self.safe and self.replay_check([event])
             kind = event.get('type')
-            self.prework = self.prework and kind in ('step_start', 'error')
             part = event.get('part', {})
             sid = event.get('sessionID')
-            if isinstance(sid, str):
+            if kind not in EVENT_TYPES or not isinstance(part, dict):
+                self.bad_line(); return False
+            # Only startup errors may lack a session. Never borrow an earlier
+            # session ID to turn an unbound event into completion evidence.
+            if not (kind == 'error' and sid is None and self.session is None):
+                if not isinstance(sid, str) or not sid.strip() or len(sid) > 200:
+                    self.bad_line(); return False
                 if self.session and self.session != sid:
-                    self.bad_line(); return
-                self.session = sid[:200]
+                    self.bad_line(); return False
+                self.session = sid
+            self.prework = self.prework and kind in ('step_start', 'error')
+            if kind == 'step_start':
+                self.last_finish = None
             if kind == 'error':
                 error = event.get('error', {})
                 data = error.get('data', {})
                 if len(self.errors) >= 32:
-                    self.bad_line(); return
+                    self.bad_line(); return False
                 code=data.get('statusCode')
                 if code is not None and (type(code) is not int or not 100<=code<=599):
-                    self.bad_line(); code=None
+                    self.bad_line(); return False
                 self.errors.append({'type':'error', 'error': {
                     'name':str(error.get('name',''))[:100],
                     'data':{'statusCode':code, 'message':str(data.get('message',''))[:1000]}}})
@@ -122,46 +135,60 @@ class Summary:
                 self.record_usage(event)
                 reason=part.get('reason')
                 if reason not in ('stop','length','content-filter','tool-calls','error','other','unknown'):
-                    self.bad_line();reason='unknown'
+                    self.bad_line(); return False
                 self.last_finish = {'type':'step_finish','part':{'reason':reason}}
-            elif kind == 'text':
-                text = str(part.get('text',''))
-                self.answer = text[:4000]
-                self.truncated |= len(text) > 4000
+            elif kind in ('text', 'reasoning'):
+                text = part.get('text', '')
+                if not isinstance(text, str):
+                    self.bad_line(); return False
+                if kind == 'text':
+                    self.answer = text[:4000]
+                    self.truncated |= len(text) > 4000
             elif kind == 'tool_use':
+                name = part.get('tool')
+                call = part.get('callID') or part.get('id')
+                state = part.get('state', {})
+                if (not isinstance(name, str) or not name or len(name) > 100
+                        or not isinstance(call, str) or not call or len(call) > 512
+                        or not isinstance(state, dict)):
+                    self.bad_line(); return False
+                tool_status = state.get('status')
+                if tool_status not in ('completed', 'error', 'running', 'pending'):
+                    self.bad_line(); return False
+                key = hashlib.sha256((sid + '|' + call).encode()).hexdigest()
+                if key not in self.tool_calls:
+                    if len(self.tool_calls) >= MAX_TRACKED_CALLS:
+                        self.truncated = True
+                        self.bad_line(); return False
+                    self.tool_calls.add(key)
+                    bucket = name if name in self.tools or len(self.tools) < 64 else 'other'
+                    self.tools[bucket] = self.tools.get(bucket, 0) + 1
+                previous_status = self.tool_call_status.get(key)
+                if previous_status in ('completed', 'error') and previous_status != tool_status:
+                    self.bad_line(); return False
+                self.last_finish = None
                 self.submission.consume(part, sid)
-                name = str(part.get('tool','unknown'))[:100]
                 self.activity_sequence += 1
                 if name not in ('read', 'glob', 'grep', 'list', 'bash', submission.TOOL):
                     self.last_non_shell_activity = self.activity_sequence
-                if name not in self.tools and len(self.tools) >= 64: name = 'other'
-                call=part.get('callID') or part.get('id')
-                key=hashlib.sha256((str(event.get('sessionID',''))+'|'+str(call)).encode()).hexdigest() if call else None
-                if key is None or key not in self.tool_calls:
-                    self.tools[name] = self.tools.get(name, 0) + 1
-                if key and len(self.tool_calls)<10000: self.tool_calls.add(key)
-                elif key: self.truncated=True
-                state = part.get('state', {})
                 self.denied |= 'rejected permission' in str(state.get('error','')).lower()
-                tool_status=state.get('status')
-                if tool_status not in ('completed','error','running','pending'):
-                    self.bad_line(); tool_status='unknown'
+                if tool_status in ('pending', 'running'):
+                    self.pending_tools.add(key)
+                else:
+                    self.pending_tools.discard(key)
                 if name in ('read','glob','grep','list') and self.progress_phase=='starting':
                     self._set_progress_phase('exploring')
                 elif name == submission.TOOL and tool_status=='completed':
                     self._set_progress_phase('finishing')
                 elif name not in ('read','glob','grep','list','bash',submission.TOOL) and self.progress_phase=='starting':
                     self._set_progress_phase('exploring')
-                # Bounded observed status per tool; counts remain the authoritative
-                # "was it called" signal. Status is recorded only when available and
-                # transitions once per call ID to avoid double counting updates.
-                if tool_status in ('completed','error') and name in self.tools:
-                    previous=self.tool_call_status.get(key) if key else None
-                    if key is None or previous!=tool_status:
-                        states=self.tool_status.setdefault(name, {'completed':0,'error':0})
-                        states[tool_status]=states.get(tool_status,0)+1
-                    if key and len(self.tool_call_status)<10000:
-                        self.tool_call_status[key]=tool_status
+                # Track nonterminal calls too: stop + submission is insufficient
+                # when another observed tool has not completed.
+                if tool_status in ('completed', 'error') and previous_status != tool_status:
+                    bucket = name if name in self.tools else 'other'
+                    states = self.tool_status.setdefault(bucket, {'completed': 0, 'error': 0})
+                    states[tool_status] += 1
+                self.tool_call_status[key] = tool_status
                 inp = state.get('input', {})
                 if name in ('edit','write','patch','apply_patch') and state.get('status')=='completed':
                     self._set_progress_phase('fixing' if self.validation_failed else 'implementing')
@@ -181,17 +208,18 @@ class Summary:
                             'tool_status':tool_status,
                             'exit':exit_code if type(exit_code) is int else None,
                             '_call':identity, 'sequence':self.activity_sequence}
-                    # Terminal updates replace running/duplicate calls; a bounded
-                    # recent-command tail stays available as observed writer evidence.
-                    previous=next((x for x in self.commands if x['_call']==identity), None)
-                    if previous:
-                        if any(previous[k]!=record[k] for k in ('command','command_truncated','tool_status','exit')):
-                            self.bad_line()
-                        # Duplicate terminal events are not a fresh test rerun.
-                        record['sequence']=previous['sequence']
-                    self.commands=[x for x in self.commands if x['_call']!=identity]
-                    self.commands.append(record)
-                    self.commands=self.commands[-10:]
+                    # Keep identity/order separately from the public 10-command
+                    # tail. Evicted duplicate events cannot become new checks.
+                    fingerprint = hashlib.sha256(json.dumps(
+                        [command, tool_status, record['exit']], ensure_ascii=True).encode()).hexdigest()
+                    previous = self.command_history.get(identity)
+                    if previous is not None:
+                        if previous != fingerprint:
+                            self.bad_line(); return False
+                    else:
+                        self.command_history[identity] = fingerprint
+                        self.commands.append(record)
+                        self.commands = self.commands[-10:]
                     if _looks_like_validation(command):
                         if record['exit'] not in (None,0) or tool_status=='error':
                             self.validation_failed=True
@@ -202,8 +230,10 @@ class Summary:
                     elif self.progress_phase=='starting':
                         self._set_progress_phase('exploring')
 
+            return True
         except (TypeError, AttributeError, ValueError):
             self.bad_line()
+            return False
 
     def classification_events(self):
         result=list(self.errors)
@@ -213,7 +243,7 @@ class Summary:
 
     def public(self):
         return {'result_submission':self.submission.public(), 'session_id':self.session, 'tools':self.tools, 'tool_status':self.tool_status, 'worker_tokens':self.token_usage(),
-                'last_non_shell_activity':self.last_non_shell_activity,
+                'last_non_shell_activity':self.last_non_shell_activity, 'pending_tools':len(self.pending_tools),
                 'mutation_files_reported_by_tools':self.files, 'shell_commands':[{k:v for k,v in x.items() if k!='_call'} for x in self.commands],
                 'provider_errors':[{'name':e['error']['name'],'status_code':e['error']['data']['statusCode']} for e in self.errors[:5]], 'worker_answer':self.answer, 'summary_truncated':self.truncated,
                 'replay_safe':self.safe, 'malformed_output':self.invalid}
@@ -229,6 +259,8 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         fd, name=tempfile.mkstemp(prefix='worker-',suffix='.jsonl',dir=directory)
         log=os.fdopen(fd,'wb'); log_path=name
     p=None; completed=False; launched=False
+    previous_sigterm = None
+    sigterm_installed = False
     if progress_stream is False:
         progress_stream=None
     elif progress_stream is None:
@@ -241,6 +273,14 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         error.worker_launched=launched
         return error
     try:
+        if threading.current_thread() is threading.main_thread():
+            previous_sigterm = signal.getsignal(signal.SIGTERM)
+            def interrupt(signum, frame):
+                # Ignore repeated termination requests while finally cleans up.
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                raise KeyboardInterrupt('Worker interrupted by SIGTERM')
+            signal.signal(signal.SIGTERM, interrupt)
+            sigterm_installed = True
         # A temporary stdin file prevents pipe-write deadlock on large task prompts.
         with tempfile.TemporaryFile() as stdin:
             stdin.write(prompt.encode()); stdin.seek(0)
@@ -321,13 +361,17 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                             if i<len(segments)-1:
                                 if not discard and buffer.strip():
                                     try:
-                                        summary.consume(json.loads(buffer)); mark_activity(); show_progress()
+                                        if summary.consume(json.loads(buffer)):
+                                            mark_activity()
+                                        show_progress()
                                     except (ValueError,UnicodeError): summary.bad_line()
                                 buffer=b''; discard=False
                     show_progress()
                 if buffer.strip() and not discard:
                     try:
-                        summary.consume(json.loads(buffer)); mark_activity(); show_progress()
+                        if summary.consume(json.loads(buffer)):
+                            mark_activity()
+                        show_progress()
                     except (ValueError,UnicodeError): summary.bad_line()
                 try:
                     rc=p.wait(timeout=wait_timeout())
@@ -370,3 +414,5 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         if log:
             try: log.close()
             except OSError: pass
+        if sigterm_installed:
+            signal.signal(signal.SIGTERM, previous_sigterm)
