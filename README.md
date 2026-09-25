@@ -11,6 +11,7 @@ Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 �
 | [SKILL.md](SKILL.md) | 모델이 따르는 한국어 실행 절차와 판단 원칙 |
 | `scripts/lite.py` | 설정·모델 선택·잠금·단일 세션 실행 |
 | `scripts/streaming.py` | JSONL 처리, 활동 타임아웃, 프로세스 정리, 제한된 관측 기록 |
+| `scripts/platform_support.py` + `scripts/windows_job.py` | OS별 잠금·CLI 실행·파이프 읽기·프로세스 수명 관리 |
 | `scripts/submission.py` + `assets/submit-result.mjs` | 구조화된 결과 제출과 형식 검증 |
 | `scripts/verification.py` | 선언된 로컬 검증 명령과 관측 종료 코드 대조 |
 | `assets/worker-agent.json` | 도구 권한 프로필. OS 샌드박스가 아님 |
@@ -21,8 +22,8 @@ Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 �
 
 ## 시작하기
 
-필요한 환경은 **macOS/Linux, Python 3.10+, Git, OpenCode CLI, 기존 provider 인증,
-CLI와 호환되는 `@opencode-ai/plugin` SDK**다. Node.js는 JavaScript 제출 도구 검증에도 필요하다.
+필요한 환경은 **macOS/Linux 또는 네이티브 Windows, Python 3.10+, Git, OpenCode CLI, 기존 provider 인증,
+CLI와 호환되는 `@opencode-ai/plugin` SDK**다. Node.js는 JavaScript 제출 도구 검증과 Windows npm 설치판 실행에도 필요하다.
 이 스킬만 올린다고 CLI가 없는 ChatGPT 환경에서 실행할 수 있는 것은 아니다.
 자세한 SDK 위치와 설정은 [설정 안내](references/lite-v2.md)를 확인한다. 한 환경에는 이 버전만 설치한다.
 
@@ -54,6 +55,22 @@ python3 scripts/lite.py --project "/absolute/repo" run --brief "/absolute/task.t
 `--project`와 `--config`는 `run` 앞에, 나머지 실행 옵션은 뒤에 둔다.
 정상 `run`은 모델 목록을 재조회하지 않고 저장된 모델로 OpenCode CLI를 한 번 시작한다.
 
+### Windows / PowerShell
+
+WSL 없이 Windows Python으로 실행할 수 있다. `python3` 대신 `python` 또는 `py -3`를 사용한다.
+`provider/model`과 경로는 실제 값으로 바꾼다.
+
+```powershell
+python .\scripts\lite.py models
+python .\scripts\lite.py set-default 'provider/model'
+python .\scripts\lite.py --project 'C:\src\my-project' run --brief 'C:\work\task.txt' --explicit
+```
+
+지시 파일은 UTF-8로 저장한다(BOM 허용, UTF-16 미지원). 표준 npm 설치판의 `.cmd`는 shell로 실행하지 않고
+Node 진입점을 사용한다. 비표준 설치는 `OPENCODE_WORKER_BIN`에 실제 실행 파일 경로를 지정한다.
+설치·설정 위치·종료 한계는 [Windows 안내](references/windows.md)를 확인한다.
+이 변경은 Codex 샌드박스 제한을 해제하거나 Linux 전용 프로젝트 도구를 자동 변환하지 않는다.
+
 ## 자주 쓰는 선택 사항
 
 | 필요 | 옵션 또는 명령 |
@@ -83,7 +100,8 @@ stdout은 압축된 JSON 결과, stderr는 진행 표시다. 진행 표시만으
 
 비정상 종료나 누락·충돌 제출을 완료로 처리하지 않는다. 부분 변경은 보존하고 자동 재실행하지 않는다.
 권한 프로필은 임의 shell/MCP/외부 프로세스를 완전히 격리하는 보안 경계가 아니다.
-SIGTERM·Ctrl-C·타임아웃은 같은 그룹의 자식 정리를 시도하지만 SIGKILL, 그룹을 벗어난 자식,
+Linux/macOS는 SIGTERM·Ctrl-C·타임아웃에 같은 그룹의 자식 정리를 시도한다.
+Windows는 kill-on-close Job Object를 사용하지만 생성 직후 할당 전의 자식·외부 서비스로 시작한 프로세스·
 호스트의 종료 거부까지 보장하지 않는다. 재실행 전에 남은 실행 상태를 확인한다.
 
 ## 검증과 평가
@@ -93,7 +111,8 @@ python3 -m unittest discover -s scripts -p 'test_*.py' -v
 node --check assets/submit-result.mjs
 ```
 
-테스트는 가짜 CLI와 SDK 인터페이스를 사용한다. Node.js가 없으면 JavaScript 계약 테스트가 skipped로 표시된다.
+Windows에서는 같은 검사에 `python`을 사용한다. CI는 Windows/Linux/macOS에서 Python 3.10/3.13을 검사한다.
+테스트는 가짜 CLI와 SDK 인터페이스를 사용한다. OS 전용 검사와 Node.js가 없는 환경의 JavaScript 계약 검사는 skipped로 표시된다.
 실제 OpenCode/SDK/provider의 호환성, 코드 품질, Head 토큰 절감은 별도의 실사용 검증이 필요하다.
 
 [스킬 평가 기준](references/skill-evaluation.md)은 자동으로 확인할 수 있는 조건과 LLM 행동 평가를 구분한다.

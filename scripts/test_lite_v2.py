@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lite
 import streaming
 import submission
+from fixture_support import fake_cli
 
 
 def report(**extra):
@@ -165,9 +166,7 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_streaming_inactivity_timeout_terminates_silent_process(self):
         with tempfile.TemporaryDirectory() as t:
-            exe = Path(t) / "opencode"
-            exe.write_text(f"#!{sys.executable} -S\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
-            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            env = fake_cli(Path(t), f"import time\ntime.sleep(10)\n")
             with self.assertRaises(TimeoutError) as caught:
                 streaming.run(["run"], t, None, "task", env, lambda _: False,
                               inactivity_timeout=0.3, progress_stream=False, progress_heartbeat=0)
@@ -175,16 +174,13 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_streaming_activity_refreshes_deadline_beyond_inactivity_window(self):
         with tempfile.TemporaryDirectory() as t:
-            exe = Path(t) / "opencode"
-            exe.write_text(
-                f"#!{sys.executable} -S\nimport json,time\n"
+            env = fake_cli(Path(t),
+                f"import json,time\n"
                 "for i in range(7):\n"
                 "    print(json.dumps({'type':'text','sessionID':'s','part':{'text':'step'}}),flush=True)\n"
                 "    time.sleep(0.2)\n"
                 "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
                 "'tokens':{'input':1,'output':1,'total':2}}}),flush=True)\n")
-            exe.chmod(0o700)
-            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
             started = time.monotonic()
             rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
                                               inactivity_timeout=1.0, progress_stream=False, progress_heartbeat=0)
@@ -195,9 +191,7 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_streaming_progress_heartbeat_does_not_reset_inactivity(self):
         with tempfile.TemporaryDirectory() as t:
-            exe = Path(t) / "opencode"
-            exe.write_text(f"#!{sys.executable} -S\nimport time\ntime.sleep(10)\n"); exe.chmod(0o700)
-            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
+            env = fake_cli(Path(t), f"import time\ntime.sleep(10)\n")
             progress = io.StringIO()
             with self.assertRaises(TimeoutError) as caught:
                 streaming.run(["run"], t, None, "task", env, lambda _: False,
@@ -208,17 +202,14 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_streaming_normal_completion_and_provider_error_are_not_timeouts(self):
         with tempfile.TemporaryDirectory() as t:
-            exe = Path(t) / "opencode"
-            exe.write_text(f"#!{sys.executable} -S\nimport json\n"
+            env = fake_cli(Path(t), f"import json\n"
                            "print(json.dumps({'type':'step_finish','sessionID':'s','part':{'id':'end','reason':'stop',"
                            "'tokens':{'input':1,'output':1,'total':2}}}))\n")
-            exe.chmod(0o700)
-            env = {**os.environ, "PATH": t + os.pathsep + os.environ["PATH"]}
             rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
                                               inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
             self.assertEqual(rc, 0)
             self.assertEqual((summary.last_finish or {}).get("part", {}).get("reason"), "stop")
-            exe.write_text(f"#!{sys.executable} -S\nimport json\n"
+            env = fake_cli(Path(t), f"import json\n"
                            "print(json.dumps({'type':'error','error':{'name':'APIError','data':{'statusCode':500}}}))\n")
             rc, summary, _, _ = streaming.run(["run"], t, None, "task", env, lambda _: False,
                                               inactivity_timeout=5, progress_stream=False, progress_heartbeat=0)
@@ -278,7 +269,7 @@ class LiteV2Tests(unittest.TestCase):
         self.assertEqual(self.result(events(value), read_only=True)["status"], "needs_escalation")
 
     def test_lock_is_config_independent(self):
-        expected = self.default.parent / "locks" / (lite.hashlib.sha256(os.fsencode(str(self.root.resolve()))).hexdigest() + ".lock")
+        expected = self.default.parent / "locks" / (lite.hashlib.sha256(os.fsencode(os.path.normcase(str(self.root.resolve())))).hexdigest() + ".lock")
         self.assertEqual(lite.lock_path(str(self.root), self.cfg), expected)
         self.assertEqual(lite.lock_path(str(self.root), self.root / "other/config.json"), expected)
         with lite.checkout_lock(str(self.root), self.cfg):
@@ -288,8 +279,16 @@ class LiteV2Tests(unittest.TestCase):
     def test_symlink_and_git_subdirectory_share_checkout_lock(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         nested = self.root / "nested"; nested.mkdir()
-        link = self.root / "alias"; link.symlink_to(self.root, target_is_directory=True)
         self.assertEqual(lite.lock_path(str(self.root)), lite.lock_path(str(nested)))
+
+    def test_symlink_shares_checkout_lock_when_host_permits_it(self):
+        link = self.root / "alias"
+        try:
+            link.symlink_to(self.root, target_is_directory=True)
+        except OSError as error:
+            if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows symlinks require Developer Mode or privilege")
+            raise
         self.assertEqual(lite.lock_path(str(self.root)), lite.lock_path(str(link)))
 
     def test_separate_checkouts_do_not_share_lock(self):
@@ -352,13 +351,15 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_inventory_parses_only_enabled_variants(self):
         payload = 'provider/a\n' + json.dumps({'variants': {'max': {}, 'off': {'disabled': True}}}) + '\n'
-        with patch.object(lite.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=payload)):
+        with patch.object(lite.platform_support, 'opencode_command', return_value=['opencode', 'models']), \
+             patch.object(lite.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=payload)):
             self.assertEqual(lite.model_inventory(str(self.root), 'provider'), {'provider/a': ['max']})
 
     def test_inventory_malformed_metadata_is_rejected(self):
         for metadata in ([], {'variants': []}, {'variants': {'max': None}}):
             payload = 'provider/a\n' + json.dumps(metadata)
-            with self.subTest(metadata=metadata), patch.object(lite.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=payload)):
+            with self.subTest(metadata=metadata), patch.object(lite.platform_support, 'opencode_command', return_value=['opencode', 'models']), \
+                 patch.object(lite.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=payload)):
                 with self.assertRaises(lite.Failure): lite.model_inventory(str(self.root), 'provider')
 
     def test_config_updates_share_config_lock(self):
@@ -379,25 +380,23 @@ class LiteV2Tests(unittest.TestCase):
         self.assertIsNone(lite.resolve_route(lite.load(self.cfg), str(self.root))[1])
 
     def test_subprocess_fixture_exercises_real_launcher_and_jsonl(self):
-        exe = self.root / "opencode"
         captured = self.root / "fixture-capture.json"
         payload = events()
-        exe.write_text(f"#!{sys.executable} -S\nimport sys,json,os\n"
+        env = fake_cli(self.root, f"import sys,json,os\n"
                        "assert sys.argv[1]=='run', 'unexpected extra CLI call'\n"
                        "assert not os.path.exists(" + repr(str(captured)) + "), 'unexpected replay'\n"
                        "json.dump({'args':sys.argv[1:],'prompt':sys.stdin.read()},open(" + repr(str(captured)) + ",'w'))\n"
                        "for event in " + repr(payload) + ": print(json.dumps(event),flush=True)\n")
-        exe.chmod(0o700)
         sdk_root = self.root / "sdk"
         sdk = sdk_root / "node_modules/@opencode-ai/plugin/dist/tool.js"
         sdk.parent.mkdir(parents=True); sdk.write_text("// fake CLI only; no real SDK/provider\n")
         lite.save(self.cfg, self.data)
-        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+        env = {**env, "PYTHONIOENCODING": "cp1252",
                "XDG_CONFIG_HOME": str(self.root / "isolated-config"), "OPENCODE_CONFIG_DIR": str(sdk_root)}
         env.pop("OPENCODE_CONFIG_CONTENT", None)
         command = [sys.executable, str(Path(lite.__file__).resolve()), "--project", str(self.root),
                    "--config", str(self.cfg), "run", "--brief", str(self.brief), "--explicit"]
-        proc = subprocess.run(command, capture_output=True, text=True, env=env, timeout=10)
+        proc = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", env=env, timeout=10)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         value = json.loads(proc.stdout)
         self.assertEqual(value["status"], "completed")

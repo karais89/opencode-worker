@@ -5,17 +5,20 @@
 
 ## 환경
 
-Python 3.10+, Git, macOS/Linux, PATH의 OpenCode CLI와 기존 provider 인증이 필요하다.
+Python 3.10+, Git, macOS/Linux 또는 네이티브 Windows, PATH의 OpenCode CLI와 기존 provider 인증이 필요하다.
+Windows PowerShell 실행·CLI 경로 선택·인코딩은 [Windows 안내](windows.md)를 따른다. WSL은 필수가 아니다.
 제출 도구는 설치된 CLI와 호환되는 `@opencode-ai/plugin` SDK의 `dist/tool.js`를 사용한다.
 검색 위치는 `OPENCODE_CONFIG_DIR`, `${XDG_CONFIG_HOME:-~/.config}/opencode`,
 `${XDG_CACHE_HOME:-~/.cache}/opencode` 아래의 node_modules다. 없으면 중단하며 몰래 설치하지 않는다.
+Windows 홈 탐색은 `USERPROFILE`을 우선한다. SDK/플러그인은 공백과 한글 경로를 지원하는 `file:` URI로 전달한다.
 SDK는 사용자가 기존 OpenCode 설정 디렉터리에 맞는 버전으로 준비한다. 설정 파일을 덮어쓰지 않는다.
-Node.js는 실제 JavaScript 제출 도구와 제품 테스트에 필요하다.
+Node.js는 실제 JavaScript 제출 도구와 제품 테스트, Windows npm CLI 진입점 실행에 필요하다.
 정상 Worker 실행 중에는 전역 설정이나 인증 파일을 생성·수정하지 않는다.
 
 ## 모델 설정
 
 기본 설정은 `${XDG_CONFIG_HOME:-~/.config}/opencode-worker/config.json`이다.
+Windows에서 XDG 미지정 시 `%USERPROFILE%\.config\opencode-worker\config.json`이며 자동 이전하지 않는다.
 `--config` 또는 `OPENCODE_WORKER_CONFIG`로 대체 파일을 선택할 수 있다.
 기존 설정의 writer_default/default, projects, variants, aliases, mode, project_modes를 읽는다.
 알 수 없는 설정 필드는 보존하지만 fallback 등은 Lite 실행에서 사용하지 않는다.
@@ -69,6 +72,7 @@ python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
 잠금은 기본 opencode-worker/locks의 canonical checkout 해시를 사용한다.
 --config와 무관하며 같은 사용자 HOME/XDG 설정 공간에서 공유한다.
 서로 다른 HOME/XDG, 비협조적 프로세스까지 막는 OS 전역 보장은 아니다. 설정 변경도 같은 .lock을 사용한다.
+Windows는 경로 대소문자를 정규화하고 비차단 `msvcrt` 잠금을, Linux/macOS는 `flock`을 사용한다.
 
 ## 결과 의미
 
@@ -119,10 +123,12 @@ python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt 
 비활성 타임아웃은 provider 오류나 정상 프로세스 종료와 구분해 `timeout_kind`와 메시지로
 보고한다. 비활성 중단 때도 부분 변경을 보존하고 자동 재실행하지 않는다. 호스트가 자식
 프로세스 종료를 막으면 정리를 보장할 수 없다. 남은 실행 상태를 먼저 확인한다.
-일반 CLI의 SIGTERM도 Ctrl-C와 같은 정리 경로로 처리하고 기존 신호 핸들러를 복원한다.
-메인 스레드에서만 신호 핸들러를 설치한다. SIGKILL, 다른 프로세스 그룹으로 이탈한 자식,
+Linux/macOS의 SIGTERM은 Ctrl-C와 같은 정리 경로로 처리하고 기존 신호 핸들러를 복원한다.
+메인 스레드에서만 신호 핸들러를 설치한다. POSIX의 SIGKILL, 다른 프로세스 그룹으로 이탈한 자식,
 호스트가 거부하는 종료까지 보장하지 않는다. 별도 스레드에서 라이브러리로 실행할 때는 호스트가 종료를 관리한다.
-권한 프로필을 샌드박스로 설명하지 않는다.
+Windows는 kill-on-close Job Object로 자식 수명을 관리한다. 생성과 Job 할당 사이의 자식,
+외부 서비스가 시작한 프로세스까지 포함하는 보장은 아니다. Job 할당 실패 시 중단한다.
+권한 프로필이나 Job Object를 보안 샌드박스로 설명하지 않는다.
 
 ## 생략한 기능
 
@@ -137,6 +143,8 @@ python3 -m unittest discover -s scripts -p 'test_lite_v2.py'
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
+Windows는 같은 명령에 `python`을 사용한다. CI는 Windows/Linux/macOS의 Python 3.10/3.13을 검사한다.
 테스트는 가짜 CLI/SDK와 실제 JSONL 처리 경로를 사용한다. 실제 provider 통합·품질·사용량 절감을 입증하지 않는다.
 Node.js가 없으면 JavaScript 제출 계약 테스트는 건너뛰므로 skipped 수를 확인한다.
+OS 전용 프로세스/경로 검사는 해당 OS에서 실행한다. Windows에서 심볼릭 링크 생성 권한이 없을 때는 해당 검사만 건너뛴다.
 비용을 쓰지 않는 회귀 검사와 실사용 평가는 [스킬 평가 기준](skill-evaluation.md)에서 구분한다.

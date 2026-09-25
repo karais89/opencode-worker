@@ -1,6 +1,7 @@
 """Validated tool-result transport; final assistant prose is never a protocol."""
 import hashlib
 import json
+import os
 from pathlib import Path
 
 TOOL = 'codex_worker_submit_result'
@@ -37,7 +38,8 @@ def validate(report):
 def configure(env):
     """Add one local plugin for this process only; use the existing OpenCode SDK."""
     roots = [Path(env['OPENCODE_CONFIG_DIR']).expanduser()] if env.get('OPENCODE_CONFIG_DIR') else []
-    home = Path(env.get('HOME', str(Path.home())))
+    home = Path((env.get('USERPROFILE') if os.name == 'nt' else None)
+                or env.get('HOME') or str(Path.home()))
     roots += [Path(env.get('XDG_CONFIG_HOME', str(home / '.config'))) / 'opencode',
               Path(env.get('XDG_CACHE_HOME', str(home / '.cache'))) / 'opencode']
     sdk = next((root / 'node_modules/@opencode-ai/plugin/dist/tool.js' for root in roots
