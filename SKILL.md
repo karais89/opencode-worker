@@ -34,6 +34,13 @@ python3 "<this-skill>/scripts/lite.py" --project "/absolute/repo" \
   run --brief "/absolute/brief.txt" --explicit
 ```
 
+Windows 네이티브 환경에서는 `python` 또는 `py -3`와 Windows 절대 경로를 사용한다. WSL을 전제로 하지 않는다.
+PowerShell 명령·UTF-8 지시 파일·CLI 위치가 필요할 때만 [Windows 안내](references/windows.md)를 읽는다.
+
+```powershell
+python '<this-skill>\scripts\lite.py' --project 'C:\src\repo' run --brief 'C:\work\brief.txt' --explicit
+```
+
 설정된 provider 사용에 대한 동의를 반복해서 묻지 않는다. 호스트가 요구하는 보안 승인은
 정상 UI로 받고 거부를 우회하지 않는다. 필수 CLI·인증·SDK가 없으면 차단 사유를 보고한다.
 

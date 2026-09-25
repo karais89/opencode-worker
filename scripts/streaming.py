@@ -310,7 +310,7 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                     if last_event_at is None: parts.append("last_event=none")
                     else: parts.append(f"last_event={int(now-last_event_at)}s_ago")
                 try:
-                    progress_stream.write(' · '.join(parts)+'\n'); progress_stream.flush()
+                    progress_stream.write(' | '.join(parts)+'\n'); progress_stream.flush()
                 except (OSError,ValueError):
                     pass
                 last_progress_at=now; last_progress_revision=summary.progress_revision

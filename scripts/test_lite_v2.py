@@ -174,7 +174,7 @@ class LiteV2Tests(unittest.TestCase):
 
     def test_streaming_activity_refreshes_deadline_beyond_inactivity_window(self):
         with tempfile.TemporaryDirectory() as t:
-            env = fake_cli(Path(t), 
+            env = fake_cli(Path(t),
                 f"import json,time\n"
                 "for i in range(7):\n"
                 "    print(json.dumps({'type':'text','sessionID':'s','part':{'text':'step'}}),flush=True)\n"
@@ -391,7 +391,7 @@ class LiteV2Tests(unittest.TestCase):
         sdk = sdk_root / "node_modules/@opencode-ai/plugin/dist/tool.js"
         sdk.parent.mkdir(parents=True); sdk.write_text("// fake CLI only; no real SDK/provider\n")
         lite.save(self.cfg, self.data)
-        env = {**env,
+        env = {**env, "PYTHONIOENCODING": "cp1252",
                "XDG_CONFIG_HOME": str(self.root / "isolated-config"), "OPENCODE_CONFIG_DIR": str(sdk_root)}
         env.pop("OPENCODE_CONFIG_CONTENT", None)
         command = [sys.executable, str(Path(lite.__file__).resolve()), "--project", str(self.root),

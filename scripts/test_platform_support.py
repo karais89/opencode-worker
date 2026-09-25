@@ -1,5 +1,4 @@
 """Cross-platform runtime contracts; all children are local, provider-free fixtures."""
-import contextlib
 import copy
 import errno
 import io
@@ -10,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -96,6 +94,14 @@ class PlatformTests(unittest.TestCase):
         brief.write_text('GOAL: \ud55c\uae00 \uacbd\ub85c', encoding='utf-8-sig')
         self.assertEqual(lite.read_brief(brief), 'GOAL: \ud55c\uae00 \uacbd\ub85c')
 
+    def test_empty_bom_brief_is_rejected(self):
+        brief = self.root / 'empty.txt'
+        for value in (b'\xef\xbb\xbf', b'\xef\xbb\xbf \r\n'):
+            brief.write_bytes(value)
+            with self.assertRaises(lite.Failure) as caught:
+                lite.read_brief(brief)
+            self.assertEqual(caught.exception.code, 'invalid_brief')
+
     def test_json_output_works_with_legacy_ascii_stdout(self):
         code = (f'import sys;sys.path.insert(0,{SCRIPTS!r});import lite;'
                 "lite.emit({'path':'\\ud55c\\uae00'})")
@@ -119,7 +125,7 @@ class PlatformTests(unittest.TestCase):
         with patch.object(host, 'WINDOWS', True), patch.object(host.shutil, 'which', return_value='node.exe'):
             cmd = host.opencode_command(['--dir', 'repo & literal%PATH%!^'],
                 {'OPENCODE_WORKER_BIN': str(shim), 'PATH': ''})
-        self.assertEqual(cmd, ['node.exe', str(launcher), '--dir', 'repo & literal%PATH%!^'])
+        self.assertEqual(cmd, ['node.exe', str(launcher.resolve()), '--dir', 'repo & literal%PATH%!^'])
 
     def test_project_local_npm_launcher_is_resolved(self):
         shim = self.root / 'node_modules/.bin/opencode.cmd'
@@ -129,7 +135,7 @@ class PlatformTests(unittest.TestCase):
         launcher.parent.mkdir(parents=True)
         launcher.write_text('// fixture\n')
         with patch.object(host, 'WINDOWS', True), patch.object(host.shutil, 'which', return_value='node.exe'):
-            self.assertEqual(host.opencode_command([], {'OPENCODE_WORKER_BIN': str(shim)})[1], str(launcher))
+            self.assertEqual(host.opencode_command([], {'OPENCODE_WORKER_BIN': str(shim)})[1], str(launcher.resolve()))
 
     def test_arbitrary_batch_wrapper_is_rejected(self):
         shim = self.root / 'opencode.cmd'

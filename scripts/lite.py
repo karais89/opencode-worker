@@ -186,7 +186,10 @@ def read_brief(path):
         raw = source.read(8193)
     if not raw.strip() or len(raw) > 8192:
         raise Failure("invalid_brief", "Supply a nonempty UTF-8 brief at or below 8 KiB.")
-    return raw.decode("utf-8-sig").strip()
+    text = raw.decode("utf-8-sig").strip()
+    if not text:
+        raise Failure("invalid_brief", "Supply a nonempty UTF-8 brief at or below 8 KiB.")
+    return text
 
 
 def make_prompt(root, brief, read_only=False, skill_dirs=()):
