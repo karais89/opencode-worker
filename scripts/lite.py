@@ -3,7 +3,6 @@
 import argparse
 import contextlib
 import copy
-import fcntl
 import hashlib
 import json
 import math
@@ -15,6 +14,7 @@ import sys
 import tempfile
 import time
 
+import platform_support
 import streaming
 import submission
 import verification
@@ -31,7 +31,8 @@ class Failure(Exception):
 
 
 def emit(value):
-    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    # ASCII JSON remains valid UTF-8 on redirected legacy Windows code pages.
+    print(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
 
 
 def config_path(value=None):
@@ -39,7 +40,7 @@ def config_path(value=None):
 
 
 def load(path):
-    data = json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     if not isinstance(data, dict):
         raise Failure("invalid_config", "Configuration must be an object.")
     data = {**copy.deepcopy(BASE), **data}
@@ -60,7 +61,7 @@ def save(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".config-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
             handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
         os.replace(name, path)
@@ -72,12 +73,15 @@ def save(path, data):
 @contextlib.contextmanager
 def file_lock(path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as handle:
+    with path.open("a+b") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            platform_support.lock_file(handle)
         except BlockingIOError as error:
             raise Failure("busy", "Another Worker or configuration update owns this lock.") from error
-        yield
+        try:
+            yield
+        finally:
+            platform_support.unlock_file(handle)
 
 
 def canonical_project(value):
@@ -85,12 +89,12 @@ def canonical_project(value):
     if not root.is_dir() or root in (Path(root.anchor), Path.home().resolve()):
         raise Failure("invalid_project", "Use a specific existing project, not home or filesystem root.")
     probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, encoding="utf-8", timeout=10)
     if probe.returncode == 0 and probe.stdout.strip():
         root = Path(probe.stdout.strip()).resolve()
     if root in (Path(root.anchor), Path.home().resolve()):
         raise Failure("invalid_project", "Git root must be a specific project.")
-    return str(root)
+    return os.path.normcase(str(root))
 
 
 def route_id(route, data):
@@ -135,7 +139,7 @@ def worker_env(read_only=False, skill_dirs=()):
     extra = json.loads(env.get("OPENCODE_CONFIG_CONTENT", "{}"))
     if not isinstance(extra, dict) or ("agent" in extra and not isinstance(extra["agent"], dict)):
         raise Failure("invalid_environment", "OpenCode process configuration must be an object.")
-    profile = json.loads((Path(__file__).resolve().parent.parent / "assets/worker-agent.json").read_text())
+    profile = json.loads((Path(__file__).resolve().parent.parent / "assets/worker-agent.json").read_text(encoding="utf-8"))
     profile["prompt"] = (
         "Perform only the supplied task in its repository; follow relevant AGENTS.md and Skills. "
         "Use authorized tools and finish relevant validation in this session. Preserve unrelated edits. "
@@ -156,7 +160,10 @@ def worker_env(read_only=False, skill_dirs=()):
         if not read_only:
             permission["edit"] = dict(permission["edit"])
         for directory in skill_dirs:
-            for pattern in (directory, directory + "/*"):
+            # OpenCode uses forward-slash patterns even on Windows. Retain the
+            # native spelling too for compatible older CLI versions.
+            forms = {directory, directory.replace("\\", "/")} if os.name == "nt" else {directory}
+            for pattern in sorted({p for form in forms for p in (form, form + "/*")}):
                 permission["external_directory"][pattern] = "allow"
                 permission["read"][pattern] = "allow"
                 if not read_only:
@@ -179,7 +186,7 @@ def read_brief(path):
         raw = source.read(8193)
     if not raw.strip() or len(raw) > 8192:
         raise Failure("invalid_brief", "Supply a nonempty UTF-8 brief at or below 8 KiB.")
-    return raw.decode("utf-8").strip()
+    return raw.decode("utf-8-sig").strip()
 
 
 def make_prompt(root, brief, read_only=False, skill_dirs=()):
@@ -276,8 +283,8 @@ def run_worker(args, data, root, cfg_path):
 
 
 def model_inventory(root, provider=None):
-    cmd = ["opencode", "models"] + ([provider, "--verbose"] if provider else [])
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=60)
+    cmd = platform_support.opencode_command(["models"] + ([provider, "--verbose"] if provider else []))
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
     if proc.returncode:
         raise Failure("models_failed", "OpenCode inventory unavailable; existing configuration was not changed.")
     lines = proc.stdout.splitlines(keepends=True)

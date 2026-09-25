@@ -4,7 +4,7 @@ import submission
 import hashlib
 import os
 from pathlib import Path
-import selectors
+import platform_support
 import signal
 import subprocess
 import sys
@@ -259,6 +259,7 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         fd, name=tempfile.mkstemp(prefix='worker-',suffix='.jsonl',dir=directory)
         log=os.fdopen(fd,'wb'); log_path=name
     p=None; completed=False; launched=False
+    reader=None; job=None
     previous_sigterm = None
     sigterm_installed = False
     if progress_stream is False:
@@ -284,9 +285,13 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         # A temporary stdin file prevents pipe-write deadlock on large task prompts.
         with tempfile.TemporaryFile() as stdin:
             stdin.write(prompt.encode()); stdin.seek(0)
-            p=subprocess.Popen(['opencode',*args],cwd=cwd,env=env,stdin=stdin,
-                stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            command=platform_support.opencode_command(args, env)
+            job=platform_support.create_job()
+            p=subprocess.Popen(command,cwd=cwd,env=env,stdin=stdin,
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0,
+                **platform_support.process_options())
             launched=True
+            if job: job.assign(p)
             started=time.monotonic(); last_event_at=None; last_progress_at=started
             last_progress_revision=summary.progress_revision
             def show_progress(force=False):
@@ -310,9 +315,7 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                     pass
                 last_progress_at=now; last_progress_revision=summary.progress_revision
             show_progress(force=True)
-            selector=selectors.DefaultSelector()
-            selector.register(p.stdout,selectors.EVENT_READ,'stdout')
-            selector.register(p.stderr,selectors.EVENT_READ,'stderr')
+            reader=platform_support.PipeReader(p.stdout,p.stderr)
             buffer=b''; discard=False; stderr_present=False
             start=time.monotonic()
             hard_deadline=None if timeout is None else start+timeout
@@ -337,53 +340,47 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
                 last_event_at=time.monotonic()
                 if inactivity_timeout is not None:
                     active_deadline=last_event_at+inactivity_timeout
-            try:
-                while selector.get_map():
-                    kind=deadline_reached()
-                    if kind:
-                        error=TimeoutError('Worker inactivity timeout' if kind=='inactivity' else 'Worker timeout')
-                        error.timeout_kind=kind
-                        raise error
-                    for key,_ in selector.select(select_window()):
-                        chunk=os.read(key.fileobj.fileno(),65536)
-                        if not chunk:
-                            selector.unregister(key.fileobj); continue
-                        if key.data=='stderr':
-                            stderr_present=True; continue
-                        if log: log.write(chunk)
-                        # Split bounded chunks; never accumulate an unbounded JSON line.
-                        segments=chunk.split(b'\n')
-                        for i, segment in enumerate(segments):
-                            if not discard:
-                                if len(buffer)+len(segment)>MAX_LINE:
-                                    buffer=b''; discard=True; summary.bad_line()
-                                else: buffer+=segment
-                            if i<len(segments)-1:
-                                if not discard and buffer.strip():
-                                    try:
-                                        if summary.consume(json.loads(buffer)):
-                                            mark_activity()
-                                        show_progress()
-                                    except (ValueError,UnicodeError): summary.bad_line()
-                                buffer=b''; discard=False
-                    show_progress()
-                if buffer.strip() and not discard:
-                    try:
-                        if summary.consume(json.loads(buffer)):
-                            mark_activity()
-                        show_progress()
-                    except (ValueError,UnicodeError): summary.bad_line()
+            while reader.active:
+                kind=deadline_reached()
+                if kind:
+                    error=TimeoutError('Worker inactivity timeout' if kind=='inactivity' else 'Worker timeout')
+                    error.timeout_kind=kind
+                    raise error
+                for name,chunk in reader.read(select_window()):
+                    if name=='stderr':
+                        stderr_present=True; continue
+                    if log: log.write(chunk)
+                    # Split bounded chunks; never accumulate an unbounded JSON line.
+                    segments=chunk.split(b'\n')
+                    for i, segment in enumerate(segments):
+                        if not discard:
+                            if len(buffer)+len(segment)>MAX_LINE:
+                                buffer=b''; discard=True; summary.bad_line()
+                            else: buffer+=segment
+                        if i<len(segments)-1:
+                            if not discard and buffer.strip():
+                                try:
+                                    if summary.consume(json.loads(buffer)):
+                                        mark_activity()
+                                    show_progress()
+                                except (ValueError,UnicodeError): summary.bad_line()
+                            buffer=b''; discard=False
+                show_progress()
+            if buffer.strip() and not discard:
                 try:
-                    rc=p.wait(timeout=wait_timeout())
-                except subprocess.TimeoutExpired as error:
-                    error.timeout_kind=deadline_reached() or 'inactivity'
-                    raise
-                completed=True
-                summary._set_progress_phase('process_exited')
-                show_progress(force=True)
-                return rc,summary,stderr_present,log_path
-            finally:
-                selector.close()
+                    if summary.consume(json.loads(buffer)):
+                        mark_activity()
+                    show_progress()
+                except (ValueError,UnicodeError): summary.bad_line()
+            try:
+                rc=p.wait(timeout=wait_timeout())
+            except subprocess.TimeoutExpired as error:
+                error.timeout_kind=deadline_reached() or 'inactivity'
+                raise
+            completed=True
+            summary._set_progress_phase('process_exited')
+            show_progress(force=True)
+            return rc,summary,stderr_present,log_path
     except (TimeoutError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
         raise attach(error)
     except OSError as error:
@@ -391,23 +388,15 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
         # relabelled as launch_failed; they carry observed session evidence.
         raise attach(error)
     finally:
-        if p is not None:
-            if not completed:
-                try: os.killpg(p.pid,signal.SIGTERM)
-                except (ProcessLookupError, OSError): pass
-                # A reaped leader does not imply its children stopped. Kill the
-                # remaining group after grace even if the leader already exited.
-                grace=time.monotonic()+0.5
-                while time.monotonic()<grace:
-                    p.poll()
-                    try: os.killpg(p.pid,0)
-                    except (ProcessLookupError, OSError): break
-                    time.sleep(0.02)
-                try: os.killpg(p.pid,signal.SIGKILL)
-                except (ProcessLookupError, OSError): pass
-                try: p.wait(timeout=5)
-                except (subprocess.TimeoutExpired, OSError): pass
-            for stream in (p.stdout, p.stderr):
+        if p is not None and not completed:
+            platform_support.terminate_tree(p,job)
+        if job:
+            try: job.close()
+            except OSError: pass
+        if reader:
+            reader.close()
+        elif p is not None:
+            for stream in (p.stdout,p.stderr):
                 try:
                     if stream: stream.close()
                 except OSError: pass

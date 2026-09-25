@@ -17,6 +17,7 @@ from unittest.mock import patch
 import lite
 import streaming
 import submission
+from fixture_support import fake_cli
 from test_lite_v2 import events, finish, report, summary, tool
 
 
@@ -28,12 +29,6 @@ def submit(value=None, call="submit"):
     return tool(submission.TOOL, call, output=json.dumps(
         {"accepted": True, "report": report() if value is None else value}))
 
-
-def fake_cli(root, body):
-    exe = root / "opencode"
-    exe.write_text(f"#!{sys.executable} -S\n" + body)
-    exe.chmod(0o700)
-    return {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
 
 
 class AuditRegressions(unittest.TestCase):
@@ -141,8 +136,9 @@ class AuditRegressions(unittest.TestCase):
             data["writer_default"] = "fixture/model"
             for name in ("skill*", "skill?"):
                 skill = root / name
-                skill.mkdir()
-                (skill / "SKILL.md").write_text("fixture")
+                if os.name != "nt":  # These names cannot be created on NTFS.
+                    skill.mkdir()
+                    (skill / "SKILL.md").write_text("fixture")
                 args = SimpleNamespace(brief=str(brief), model=None, variant=None, explicit=True,
                                        inactivity_timeout=300, hard_timeout=None, read_only=False,
                                        skill_dir=[str(skill)])
@@ -171,6 +167,7 @@ class AuditRegressions(unittest.TestCase):
             with self.assertRaises(ValueError):
                 lite.read_brief(path)
 
+    @unittest.skipIf(os.name == "nt", "Popen.terminate is not SIGTERM on Windows; see Windows Job tests")
     def test_sigterm_uses_cleanup_and_restores_existing_handler(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -229,6 +226,7 @@ class AuditRegressions(unittest.TestCase):
             finally:
                 signal.signal(signal.SIGTERM, previous)
 
+    @unittest.skipIf(os.name == "nt", "POSIX process groups; see Windows Job descendant test")
     def test_timeout_stops_same_group_descendant_after_leader_exits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -275,7 +273,7 @@ class AuditRegressions(unittest.TestCase):
                 "for(const v of JSON.parse(input)){try {results.push(JSON.parse(await tool.codex_worker_submit_result.execute(v)).report);} catch {results.push(null);}}\n"
                 "console.log(JSON.stringify(results));\n")
             proc = subprocess.run(["node", str(driver)], input=json.dumps(values), capture_output=True,
-                                  text=True, timeout=10, check=True,
+                                  text=True, encoding="utf-8", timeout=10, check=True,
                                   env={**os.environ, "CODEX_WORKER_TOOL_SDK": sdk.as_uri()})
             expected = []
             for value in values:
