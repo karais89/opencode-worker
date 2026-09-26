@@ -10,7 +10,8 @@ Codex/ChatGPT가 계획을 세우고 OpenCode 또는 Grok Build CLI에 구현을
 | 파일 | 역할 |
 | --- | --- |
 | [SKILL.md](SKILL.md) | 모델이 따르는 한국어 실행 절차와 판단 원칙 |
-| `scripts/lite.py` | 설정·엔진/모델 선택·공유 잠금·단일 세션 실행 |
+| `scripts/worker.py` | provider-neutral canonical CLI entrypoint |
+| `scripts/worker.py` | 기존 import/CLI 호환을 유지하는 구현 모듈 |
 | `scripts/grok_adapter.py` | Grok Build 헤드리스 이벤트·Git 변경·프로세스 수명 처리 |
 | `scripts/streaming.py` | JSONL 처리, 활동 타임아웃, 프로세스 정리, 제한된 관측 기록 |
 | `scripts/platform_support.py` + `scripts/windows_job.py` | OS별 잠금·CLI 실행·파이프 읽기·프로세스 수명 관리 |
@@ -29,15 +30,15 @@ OpenCode 경로는 OpenCode CLI, provider 인증, 호환되는 `@opencode-ai/plu
 Grok 경로는 Grok Build CLI와 기존 로그인 또는 API 키가 필요하다. Node.js는 OpenCode의
 JavaScript 제출 도구 검증과 Windows npm 설치판 실행에도 필요하다.
 이 스킬만 올린다고 CLI가 없는 ChatGPT 환경에서 실행할 수 있는 것은 아니다.
-OpenCode SDK 위치와 설정은 [설정 안내](references/lite-v2.md), Grok 경로는
-[Grok Build 안내](references/grok.md)를 확인한다. 한 환경에는 이 버전만 설치한다.
+OpenCode SDK 위치와 설정은 [설정 안내](references/opencode.md), Grok 경로는
+[Grok Build 안내](references/grok.md)를 확인한다. 한 환경에는 이 버전만 설치한다. 기존 `scripts/lite.py` 호출도 계속 지원하지만 새 문서와 자동화는 `scripts/worker.py`를 사용한다.
 
 스킬 디렉터리에서 최초 모델 설정을 한다. 아래 `<provider/model>`은 실제 사용 가능한 식별자로 바꾼다.
 
 ```sh
-python3 scripts/lite.py models
-python3 scripts/lite.py models <provider>
-python3 scripts/lite.py set-default <provider/model>
+python3 scripts/worker.py models
+python3 scripts/worker.py models <provider>
+python3 scripts/worker.py set-default <provider/model>
 ```
 
 지원되는 실행 강도를 지정할 때만 `--variant <supported-variant>`를 추가한다.
@@ -53,8 +54,8 @@ DONE WHEN: 완료를 확인할 조건
 대상은 지시 파일만 둔 임시 폴더가 아니라 실제 저장소여야 한다.
 
 ```sh
-python3 scripts/lite.py --project "/absolute/repo" resolve
-python3 scripts/lite.py --project "/absolute/repo" run --brief "/absolute/task.txt" --explicit
+python3 scripts/worker.py --project "/absolute/repo" resolve
+python3 scripts/worker.py --project "/absolute/repo" run --brief "/absolute/task.txt" --explicit
 ```
 
 `--project`와 `--config`는 `run` 앞에, 나머지 실행 옵션은 뒤에 둔다.
@@ -64,9 +65,9 @@ Grok Build를 명시적으로 요청받았다면 `--engine grok`을 사용한다
 OpenCode 기본 경로는 그대로 유지된다. Grok 모델이 저장되지 않았으면 Grok CLI 기본 모델을 쓴다.
 
 ```sh
-python3 scripts/lite.py models --engine grok
-python3 scripts/lite.py set-default grok-4.7 --engine grok
-python3 scripts/lite.py --project "/absolute/repo" run --engine grok --brief "/absolute/task.txt" --explicit
+python3 scripts/worker.py models --engine grok
+python3 scripts/worker.py set-default grok-4.7 --engine grok
+python3 scripts/worker.py --project "/absolute/repo" run --engine grok --brief "/absolute/task.txt" --explicit
 ```
 
 ### Windows / PowerShell
@@ -95,7 +96,7 @@ Node 진입점을 사용한다. 비표준 설치는 `OPENCODE_WORKER_BIN`에 실
 | 알려진 외부 스킬 읽기 (OpenCode) | `run ... --skill-dir "/absolute/known-skill"` |
 | 활동 없는 시간 조정 | `run ... --inactivity-timeout 300` |
 | 전체 실행 시간도 제한 | `run ... --hard-timeout 7200` |
-| 새 Worker 실행 차단 | `python3 scripts/lite.py set-mode off` |
+| 새 Worker 실행 차단 | `python3 scripts/worker.py set-mode off` |
 
 `off`는 프로젝트 설정이나 `--explicit`으로 우회할 수 없다. 이미 실행 중인 프로세스를 종료하지는 않는다.
 기본 시간 제한은 유효 이벤트가 없는 300초다. 유효 이벤트가 계속 오면 총 실행 시간에는 기본 상한이 없다.
