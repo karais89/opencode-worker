@@ -1,7 +1,8 @@
-# OpenCode Worker — Lite v2
+# Coding Worker — OpenCode and Grok Build
 
-Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 결과를 받아 판단하는 스킬이다.
-**Head → 작업 지시 → OpenCode 한 세션 → 구조화된 결과 → Head**를 유지한다.
+Codex/ChatGPT가 계획을 세우고 OpenCode 또는 Grok Build CLI에 구현을 맡긴 뒤,
+짧은 결과를 받아 판단하는 스킬이다.
+**Head → 작업 지시 → 선택한 Worker 한 세션 → 구조화된 결과 → Head**를 유지한다.
 한 세션 안에서는 모델 요청, 파일 탐색, 수정과 테스트가 여러 번 발생할 수 있다.
 
 ## 무엇이 들어 있나
@@ -9,7 +10,8 @@ Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 �
 | 파일 | 역할 |
 | --- | --- |
 | [SKILL.md](SKILL.md) | 모델이 따르는 한국어 실행 절차와 판단 원칙 |
-| `scripts/lite.py` | 설정·모델 선택·잠금·단일 세션 실행 |
+| `scripts/lite.py` | 설정·엔진/모델 선택·공유 잠금·단일 세션 실행 |
+| `scripts/grok_adapter.py` | Grok Build 헤드리스 이벤트·Git 변경·프로세스 수명 처리 |
 | `scripts/streaming.py` | JSONL 처리, 활동 타임아웃, 프로세스 정리, 제한된 관측 기록 |
 | `scripts/platform_support.py` + `scripts/windows_job.py` | OS별 잠금·CLI 실행·파이프 읽기·프로세스 수명 관리 |
 | `scripts/submission.py` + `assets/submit-result.mjs` | 구조화된 결과 제출과 형식 검증 |
@@ -22,10 +24,13 @@ Codex/ChatGPT가 계획을 세우고 OpenCode에 구현을 맡긴 뒤, 짧은 �
 
 ## 시작하기
 
-필요한 환경은 **macOS/Linux 또는 네이티브 Windows, Python 3.10+, Git, OpenCode CLI, 기존 provider 인증,
-CLI와 호환되는 `@opencode-ai/plugin` SDK**다. Node.js는 JavaScript 제출 도구 검증과 Windows npm 설치판 실행에도 필요하다.
+필요한 공통 환경은 **macOS/Linux 또는 네이티브 Windows, Python 3.10+, Git**이다.
+OpenCode 경로는 OpenCode CLI, provider 인증, 호환되는 `@opencode-ai/plugin` SDK가 필요하다.
+Grok 경로는 Grok Build CLI와 기존 로그인 또는 API 키가 필요하다. Node.js는 OpenCode의
+JavaScript 제출 도구 검증과 Windows npm 설치판 실행에도 필요하다.
 이 스킬만 올린다고 CLI가 없는 ChatGPT 환경에서 실행할 수 있는 것은 아니다.
-자세한 SDK 위치와 설정은 [설정 안내](references/lite-v2.md)를 확인한다. 한 환경에는 이 버전만 설치한다.
+OpenCode SDK 위치와 설정은 [설정 안내](references/lite-v2.md), Grok 경로는
+[Grok Build 안내](references/grok.md)를 확인한다. 한 환경에는 이 버전만 설치한다.
 
 스킬 디렉터리에서 최초 모델 설정을 한다. 아래 `<provider/model>`은 실제 사용 가능한 식별자로 바꾼다.
 
@@ -55,6 +60,15 @@ python3 scripts/lite.py --project "/absolute/repo" run --brief "/absolute/task.t
 `--project`와 `--config`는 `run` 앞에, 나머지 실행 옵션은 뒤에 둔다.
 정상 `run`은 모델 목록을 재조회하지 않고 저장된 모델로 OpenCode CLI를 한 번 시작한다.
 
+Grok Build를 명시적으로 요청받았다면 `--engine grok`을 사용한다. 기존 설정과
+OpenCode 기본 경로는 그대로 유지된다. Grok 모델이 저장되지 않았으면 Grok CLI 기본 모델을 쓴다.
+
+```sh
+python3 scripts/lite.py models --engine grok
+python3 scripts/lite.py set-default grok-4.7 --engine grok
+python3 scripts/lite.py --project "/absolute/repo" run --engine grok --brief "/absolute/task.txt" --explicit
+```
+
 ### Windows / PowerShell
 
 WSL 없이 Windows Python으로 실행할 수 있다. `python3` 대신 `python` 또는 `py -3`를 사용한다.
@@ -76,8 +90,9 @@ Node 진입점을 사용한다. 비표준 설치는 `OPENCODE_WORKER_BIN`에 실
 | 필요 | 옵션 또는 명령 |
 | --- | --- |
 | 이번 실행의 모델·강도 변경 | `run ... --model <provider/model> --variant <variant>` |
-| 파일 수정 없는 조사 | `run ... --read-only` |
-| 알려진 외부 스킬 읽기 | `run ... --skill-dir "/absolute/known-skill"` |
+| Grok Build로 실행 | `run --engine grok ...` (`--model <Grok 모델 ID>`는 선택) |
+| 파일 수정 없는 조사 (OpenCode) | `run ... --read-only` |
+| 알려진 외부 스킬 읽기 (OpenCode) | `run ... --skill-dir "/absolute/known-skill"` |
 | 활동 없는 시간 조정 | `run ... --inactivity-timeout 300` |
 | 전체 실행 시간도 제한 | `run ... --hard-timeout 7200` |
 | 새 Worker 실행 차단 | `python3 scripts/lite.py set-mode off` |
@@ -90,13 +105,15 @@ Node 진입점을 사용한다. 비표준 설치는 `OPENCODE_WORKER_BIN`에 실
 stdout은 압축된 JSON 결과, stderr는 진행 표시다. 진행 표시만으로 성공을 판단하지 않는다.
 **최상위 `status`가 실행 판정**이며, 안쪽 `result.status`는 Worker가 보고한 값이다.
 오류가 발생하면 내부 보고가 `completed`여도 최상위는 `needs_escalation`일 수 있다.
+Grok 경로는 정상 `end` 이벤트, JSON 결과 형식, 실행 전후 Git 변경 경로를 함께 검사한다.
 
 | 정보 | 의미와 한계 |
 | --- | --- |
 | `validation_evidence` | 선언한 로컬 명령의 종료 코드만 대조한다. 구현 품질이나 테스트 개수를 증명하지 않는다. |
 | `partial` / `unverified` | 증거가 부족한 상태다. 실패로 단정하거나 형식만 맞추려 재실행하지 않는다. |
 | `model` / `variant` | CLI에 전달한 선택값이다. 독립 확인값 `observed_*`는 현재 null이다. |
-| `worker_tokens` | OpenCode가 보고한 토큰과 누락 범위다. 실제 청구 금액·Head 사용량과 다르다. |
+| `worker_tokens` | 각 CLI가 보고한 토큰과 누락 범위다. Head 사용량과 다르다. |
+| `worker_cost_usd` | Grok CLI가 보고한 비용이다. 다른 provider 비용으로 환산하지 않는다. |
 
 비정상 종료나 누락·충돌 제출을 완료로 처리하지 않는다. 부분 변경은 보존하고 자동 재실행하지 않는다.
 권한 프로필은 임의 shell/MCP/외부 프로세스를 완전히 격리하는 보안 경계가 아니다.
@@ -116,4 +133,5 @@ Windows에서는 같은 검사에 `python`을 사용한다. CI는 Windows/Linux/
 실제 OpenCode/SDK/provider의 호환성, 코드 품질, Head 토큰 절감은 별도의 실사용 검증이 필요하다.
 
 [스킬 평가 기준](references/skill-evaluation.md)은 자동으로 확인할 수 있는 조건과 LLM 행동 평가를 구분한다.
+[Grok Build 실사용 비교](references/grok-benchmark-2026-09-26.md)는 직접 CLI와 Worker를 같은 작업에서 실행한 단발 결과다.
 [2026-09-23 감사 기록](references/audit-2026-09-23.md)에는 재현한 결함, 수정 범위와 미검증 항목을 남긴다.

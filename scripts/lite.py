@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One OpenCode session. Routing and evidence are local; no model retry/reviewer."""
+"""One coding Worker session. Routing and evidence are local; no retry/reviewer."""
 import argparse
 import contextlib
 import copy
@@ -15,12 +15,13 @@ import tempfile
 import time
 
 import platform_support
+import grok_adapter
 import streaming
 import submission
 import verification
 
 BASE = dict(default=None, writer_default=None, projects={}, variants={}, aliases={},
-            mode="auto", project_modes={})
+            mode="auto", project_modes={}, grok={"default": None, "projects": {}})
 DEFAULT_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode-worker/config.json"
 
 
@@ -51,6 +52,17 @@ def load(path):
         if not isinstance(data[field], dict) or any(not isinstance(k, str) or not isinstance(v, str)
                                                   or not v.strip() for k, v in data[field].items()):
             raise Failure("invalid_config", field + " must map strings to nonempty strings.")
+    grok = data["grok"]
+    if not isinstance(grok, dict):
+        raise Failure("invalid_config", "grok must be an object.")
+    grok = {"default": None, "projects": {}, **grok}
+    if grok["default"] is not None and (not isinstance(grok["default"], str) or not grok["default"].strip()):
+        raise Failure("invalid_config", "grok.default must be a nonempty string or null.")
+    if not isinstance(grok["projects"], dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) or not v.strip()
+            for k, v in grok["projects"].items()):
+        raise Failure("invalid_config", "grok.projects must map strings to nonempty strings.")
+    data["grok"] = grok
     if data["mode"] not in ("auto", "manual", "off") or any(
             v not in ("auto", "manual", "off") for v in data["project_modes"].values()):
         raise Failure("invalid_config", "Modes must be auto, manual, or off.")
@@ -117,6 +129,15 @@ def resolve_route(data, root, model=None, variant=None):
     if chosen_variant is not None and (not isinstance(chosen_variant, str) or not chosen_variant.strip()):
         raise Failure("invalid_variant", "Variant must be a nonempty string.")
     return source, selected, chosen_variant
+
+
+def resolve_grok_route(data, root, model=None):
+    choices = (("one-shot", model), ("project", data["grok"]["projects"].get(root)),
+               ("global", data["grok"]["default"]))
+    source, selected = next(((source, value) for source, value in choices if value), ("grok-cli-default", None))
+    if selected is not None and (not isinstance(selected, str) or not selected.strip()):
+        raise Failure("invalid_route", "Grok model must be a nonempty model ID.")
+    return source, selected
 
 
 def mode_for(data, root):
@@ -221,7 +242,8 @@ def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=
         problem = "A declared final validation command was observed failing."
     return {"status": "needs_escalation" if problem else report["status"],
             "worker_used": bool(public.get("session_id")), "worker_process_started": True,
-            "session_id": public.get("session_id"), "model": model, "variant": variant,
+            "session_id": public.get("session_id"), "engine": "opencode",
+            "model": model, "variant": variant,
             "model_source": "selected_cli_arguments", "observed_model": None,
             "observed_variant": None, "route_source": source, "read_only": read_only,
             "elapsed_seconds": round(elapsed, 2), "result": report, "validation_evidence": evidence,
@@ -229,13 +251,89 @@ def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=
             **({"message": problem} if problem else {})}
 
 
+def make_grok_prompt(root, brief):
+    return (f"PROJECT\n{root}\n\n{brief}\n\n"
+            "Work only in this repository. Follow its AGENTS.md and relevant project instructions. "
+            "Preserve preexisting edits. Explore, implement, and validate the requested task in this one session. "
+            "Do not access secrets, change global settings, push, deploy, publish, commit, launch other agents, "
+            "or bypass a denied tool. Finish validation before the final answer. "
+            "The final answer must be one JSON object only, with status (completed or needs_escalation), "
+            "changed (array of exact repository-relative file paths changed by this task), "
+            "validation (nonempty array of actual result or blocker strings), risk (nonempty string), "
+            "and optional validation_commands (array of exact final local commands, maximum 10). "
+            "No Markdown or extra prose. Report uncertainty honestly; do not rerun a check "
+            "solely to improve reporting format.")
+
+
+def grok_result_from_summary(rc, summary, model, source, elapsed, before, after):
+    public = summary.public()
+    changed = grok_adapter.changed_since(before, after)
+    report = None
+    problem = None
+    try:
+        report = submission.validate(json.loads(summary.report()))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        problem = "Grok did not produce a valid structured result. Do not infer completion from prose."
+    evidence = verification.assess(report or {}, public)
+    if (rc != 0 or public["malformed_output"] or public["errors"] or public["tool_errors"]
+            or public["pending_tools"] or public["stop_reason"] != "end_turn" or not public["session_id"]):
+        problem = "Grok failed, was denied, or has no verified normal end event. Do not replay automatically."
+    elif report is not None and sorted(report["changed"]) != changed:
+        problem = "Reported changed paths differ from the observed Git working-tree delta."
+    elif evidence["status"] == "failed":
+        problem = "A declared final validation command was observed failing."
+    models = public.get("model_usage")
+    observed_model = next(iter(models)) if isinstance(models, dict) and len(models) == 1 else None
+    return {"status": "needs_escalation" if problem else report["status"],
+            "worker_used": bool(public["session_id"]), "worker_process_started": True,
+            "session_id": public["session_id"], "engine": "grok", "model": model,
+            "variant": None,
+            "model_source": "selected_cli_arguments" if model else "grok_cli_default",
+            "observed_model": observed_model, "observed_variant": None,
+            "route_source": source, "read_only": False, "elapsed_seconds": round(elapsed, 2),
+            "result": report, "observed_changed": changed,
+            "preexisting_changes": sorted(before),
+            "validation_evidence": evidence,
+            "worker_tokens": public["worker_tokens"], "worker_cost_usd": public["worker_cost_usd"],
+            "tools": {"total": public["tool_calls"], "errors": public["tool_errors"]},
+            **({"message": problem} if problem else {})}
+
+
+def run_grok_worker(args, data, root, cfg_path, brief):
+    if args.variant is not None:
+        raise Failure("unsupported_option", "Grok uses model IDs; --variant is OpenCode-only.")
+    if getattr(args, "read_only", False) or getattr(args, "skill_dir", []):
+        raise Failure("unsupported_option", "Grok read-only and --skill-dir are not yet supported safely.")
+    source, model = resolve_grok_route(data, root, args.model)
+    with checkout_lock(root, cfg_path):
+        before = grok_adapter.git_snapshot(root)
+        started = time.monotonic()
+        try:
+            rc, summary = grok_adapter.run(root, make_grok_prompt(root, brief), model,
+                hard_timeout=args.hard_timeout, inactivity_timeout=args.inactivity_timeout)
+        except (TimeoutError, subprocess.TimeoutExpired, KeyboardInterrupt, OSError) as error:
+            summary = getattr(error, "worker_summary", grok_adapter.Summary())
+            after = grok_adapter.git_snapshot(root)
+            partial = grok_result_from_summary(-1, summary, model, source,
+                time.monotonic() - started, before, after)
+            partial.update(status="needs_escalation", timeout_kind=getattr(error, "timeout_kind", None),
+                worker_process_started=getattr(error, "worker_launched", False),
+                message="Grok Worker interrupted. Preserve partial changes and check child cleanup before any new run.")
+            return partial
+        after = grok_adapter.git_snapshot(root)
+        return grok_result_from_summary(rc, summary, model, source,
+                                        time.monotonic() - started, before, after)
+
+
 def run_worker(args, data, root, cfg_path):
     mode = mode_for(data, root)
     if mode == "off" or (mode == "manual" and not args.explicit):
         return dict(status="mode_blocked", worker_used=False, mode=mode)
-    source, model, variant = resolve_route(data, root, args.model, args.variant)
-    if model is None:
-        return dict(status="setup_required", worker_used=False, message="Select a Worker route first.")
+    engine = getattr(args, "engine", "opencode")
+    if engine == "opencode":
+        source, model, variant = resolve_route(data, root, args.model, args.variant)
+        if model is None:
+            return dict(status="setup_required", worker_used=False, message="Select a Worker route first.")
     if not math.isfinite(args.inactivity_timeout) or args.inactivity_timeout <= 0:
         raise Failure("invalid_timeout", "Inactivity timeout must be finite and positive.")
     if args.hard_timeout is not None and (not math.isfinite(args.hard_timeout) or args.hard_timeout <= 0):
@@ -253,6 +351,8 @@ def run_worker(args, data, root, cfg_path):
             raise Failure("invalid_skill_dir", "Supply an authorized, known Skill directory without wildcard characters (* or ?).")
         skill_dirs.append(str(p))
     readonly = getattr(args, "read_only", False)
+    if engine == "grok":
+        return run_grok_worker(args, data, root, cfg_path, brief)
     with checkout_lock(root, cfg_path):
         env = worker_env(readonly, skill_dirs)
         cmd = ["run", "--format", "json", "--agent", "codex-worker", "--dir", root, "-m", model]
@@ -305,6 +405,27 @@ def model_inventory(root, provider=None):
     return found
 
 
+def grok_model_inventory(root):
+    command = platform_support.grok_command(["models"])
+    proc = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    if proc.returncode:
+        raise Failure("models_failed", "Grok inventory unavailable; existing configuration was not changed.")
+    found = {}
+    in_models = False
+    for line in proc.stdout.splitlines():
+        if line.strip() == "Available models:":
+            in_models = True
+            continue
+        if not in_models:
+            continue
+        match = re.fullmatch(r"\s*[-*]\s+(\S+)(?:\s+\(default\))?\s*", line)
+        if match:
+            found[match.group(1)] = []
+    if not found:
+        raise Failure("invalid_inventory", "Grok model list was empty or unrecognized.")
+    return found
+
+
 def update_config(args, path, root):
     # Share the config lock and atomic write convention; preserve unknown fields.
     with file_lock(path.with_suffix(".lock")):
@@ -319,6 +440,23 @@ def update_config(args, path, root):
                 raise Failure("invalid_mode", "inherit requires --project-only.")
             else:
                 data["mode"] = args.mode
+        elif getattr(args, "engine", "opencode") == "grok":
+            if args.variant is not None or args.clear_variant:
+                raise Failure("unsupported_option", "Grok --variant is not supported.")
+            clearing = args.model == "null"
+            selected = None if clearing else args.model
+            if selected is not None:
+                if not isinstance(selected, str) or not selected.strip():
+                    raise Failure("invalid_route", "Grok model must be a nonempty model ID.")
+                if selected not in grok_model_inventory(root):
+                    raise Failure("unknown_model", "Model is not in the current Grok inventory.")
+            if args.action == "set-project":
+                if clearing:
+                    data["grok"]["projects"].pop(root, None)
+                else:
+                    data["grok"]["projects"][root] = selected
+            else:
+                data["grok"]["default"] = selected
         else:
             clearing = args.model == "null"
             if clearing and (args.variant is not None or args.clear_variant):
@@ -344,19 +482,26 @@ def update_config(args, path, root):
                 if clearing:
                     data["default"] = None
         save(path, data)
-    return dict(ok=True, config_path=str(path), project=root,
-                route_source=resolve_route(data, root)[0], model=resolve_route(data, root)[1], mode=mode_for(data, root))
+    engine = getattr(args, "engine", "opencode")
+    source, model = (resolve_grok_route(data, root) if engine == "grok"
+                     else resolve_route(data, root)[:2])
+    return dict(ok=True, config_path=str(path), project=root, engine=engine,
+                route_source=source, model=model, mode=mode_for(data, root))
 
 
 def parser():
-    p = argparse.ArgumentParser(description="OpenCode Worker Lite v2")
+    p = argparse.ArgumentParser(description="OpenCode or Grok Build Worker")
     p.add_argument("--project")
     p.add_argument("--config")
     sub = p.add_subparsers(dest="action", required=True)
-    sub.add_parser("models").add_argument("provider", nargs="?")
-    sub.add_parser("resolve")
+    models = sub.add_parser("models")
+    models.add_argument("provider", nargs="?")
+    models.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
+    resolve = sub.add_parser("resolve")
+    resolve.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
     for name in ("set-default", "set-project"):
         setter = sub.add_parser(name); setter.add_argument("model")
+        setter.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
         choice = setter.add_mutually_exclusive_group()
         choice.add_argument("--variant"); choice.add_argument("--clear-variant", action="store_true")
     mode = sub.add_parser("set-mode")
@@ -364,6 +509,7 @@ def parser():
     mode.add_argument("--project-only", action="store_true")
     run = sub.add_parser("run")
     run.add_argument("--brief", required=True)
+    run.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
     run.add_argument("--model"); run.add_argument("--variant")
     run.add_argument("--explicit", action="store_true")
     run.add_argument("--read-only", action="store_true")
@@ -372,7 +518,7 @@ def parser():
     # The old total-time limit is preserved as an explicit optional hard limit,
     # but disabled by default so long active sessions are not killed.
     run.add_argument("--inactivity-timeout", type=float, default=300,
-                     help="Interrupt after this many seconds with no OpenCode JSON/event activity (default 300).")
+                     help="Interrupt after this many seconds with no recognized Worker JSON event (default 300).")
     run.add_argument("--hard-timeout", "--timeout", dest="hard_timeout", type=float, default=None,
                      help="Optional overall wall-clock hard limit in seconds; disabled by default. "
                           "The legacy --timeout total limit is this same explicit hard limit.")
@@ -387,13 +533,21 @@ def main(argv=None):
         path = config_path(args.config)
         root = canonical_project(args.project or ".")
         if args.action == "models":
-            emit({"models": model_inventory(root, args.provider)}); return 0
+            if args.engine == "grok" and args.provider:
+                raise Failure("unsupported_option", "Grok models does not take a provider filter.")
+            emit({"models": grok_model_inventory(root) if args.engine == "grok"
+                  else model_inventory(root, args.provider)}); return 0
         if args.action.startswith("set-"):
             emit(update_config(args, path, root)); return 0
         data = load(path)
         if args.action == "resolve":
-            source, model, variant = resolve_route(data, root)
-            emit(dict(project=root, mode=mode_for(data, root), route_source=source, model=model, variant=variant)); return 0
+            if args.engine == "grok":
+                source, model = resolve_grok_route(data, root)
+                variant = None
+            else:
+                source, model, variant = resolve_route(data, root)
+            emit(dict(project=root, engine=args.engine, mode=mode_for(data, root),
+                      route_source=source, model=model, variant=variant)); return 0
         result = run_worker(args, data, root, path)
         emit(result)
         return 0 if result["status"] == "completed" else 2

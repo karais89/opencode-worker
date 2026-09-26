@@ -1,4 +1,6 @@
-# Lite v2 설정과 한계
+# OpenCode Lite v2 설정과 한계
+
+이 문서는 기본 OpenCode 엔진의 세부 설정이다. Grok Build 엔진은 [Grok Build 안내](grok.md)를 본다.
 
 ## 목차
 환경 · 모델 설정 · 모드와 공유 스킬 · 결과 의미 · 타임아웃 정책 · 생략한 기능 · 검증
@@ -22,6 +24,8 @@ Windows에서 XDG 미지정 시 `%USERPROFILE%\.config\opencode-worker\config.js
 `--config` 또는 `OPENCODE_WORKER_CONFIG`로 대체 파일을 선택할 수 있다.
 기존 설정의 writer_default/default, projects, variants, aliases, mode, project_modes를 읽는다.
 알 수 없는 설정 필드는 보존하지만 fallback 등은 Lite 실행에서 사용하지 않는다.
+새 `grok` 객체의 default/projects는 Grok 모델 전용이며 OpenCode route와 분리된다.
+전역 mode/project_modes와 checkout 잠금은 두 엔진이 공유한다.
 
 ```sh
 python3 scripts/lite.py models

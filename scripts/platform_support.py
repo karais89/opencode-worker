@@ -80,6 +80,26 @@ def opencode_command(args, env=None):
         'Unsupported OpenCode wrapper; set OPENCODE_WORKER_BIN to the native opencode.exe')
 
 
+def grok_command(args, env=None):
+    """Resolve one Grok Build executable without invoking a shell wrapper."""
+    env = os.environ if env is None else env
+    override = env.get('GROK_WORKER_BIN')
+    target = os.path.expanduser(override) if override else 'grok'
+    executable = shutil.which(target, path=env.get('PATH', os.defpath))
+    if override and Path(target).is_file():
+        executable = str(Path(target).resolve())
+    if not executable:
+        raise FileNotFoundError(errno.ENOENT,
+            'Grok Build CLI not found; install it or set GROK_WORKER_BIN')
+    suffix = Path(executable).suffix.lower()
+    if override and suffix == '.py':
+        return [sys.executable, str(Path(executable).resolve()), *args]
+    if WINDOWS and suffix not in ('.exe', '.com'):
+        raise OSError(errno.ENOEXEC,
+            'Unsupported Grok wrapper; set GROK_WORKER_BIN to the native grok.exe')
+    return [executable, *args]
+
+
 def process_options():
     return ({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS
             else {'start_new_session': True})

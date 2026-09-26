@@ -1,5 +1,8 @@
 # Windows 네이티브 실행
 
+기본 OpenCode 엔진의 CLI/SDK 준비는 아래와 같다. Grok Build 엔진은
+[Grok Build 안내](grok.md)의 별도 `grok.exe` 및 인증을 사용하며, OpenCode SDK는 필요하지 않다.
+
 이 안내는 **Windows의 Python에서 직접 실행**하는 경우다. Worker 실행기에 WSL은 필요하지 않다.
 WSL에서 실행한다면 Linux용 명령과 해당 환경의 CLI·인증·SDK를 사용한다. 두 환경의 설치와 설정은 별개다.
 
