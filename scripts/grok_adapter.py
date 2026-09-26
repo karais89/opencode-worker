@@ -16,6 +16,18 @@ MAX_LINE = 4 * 1024 * 1024
 MAX_ANSWER = 16 * 1024
 SHELL_TOOL_NAMES = {'run_terminal_command', 'run_terminal_cmd', 'bash', 'shell',
                     'execute', 'run_command', 'terminal'}
+LIFECYCLE_EVENTS = {
+    'plan',
+    'auto_compact_started',
+    'auto_compact_completed',
+    'auto_compact_failed',
+    'auto_compact_cancelled',
+    'auto_continue_completed',
+    'image_compressed',
+    'memory_flush_started',
+    'memory_flush_completed',
+    'memory_capture_activity',
+}
 
 
 class Summary:
@@ -46,13 +58,13 @@ class Summary:
             self.malformed = True
             return False
         kind = event['type']
-        if kind == 'available_commands':
-            return False  # Startup inventory is not model or tool activity.
         if self.end_seen:
             self.malformed = True
             return False
+        if kind == 'available_commands':
+            return False  # Startup inventory is not model or tool activity.
         self.event_sequence += 1
-        if kind == 'plan' or kind.startswith('auto_compact_'):
+        if kind in LIFECYCLE_EVENTS:
             pass  # Documented lifecycle activity; it is not completion evidence.
         elif kind == 'max_turns_reached':
             self.errors.append(kind)
