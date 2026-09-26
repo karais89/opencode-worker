@@ -9,10 +9,10 @@ Windows 네이티브 `grok.exe`를 지원한다. 비표준 설치는 실행 파�
 `GROK_WORKER_BIN`에 지정한다. 명령 문자열이나 shell wrapper를 넣지 않는다.
 
 ```powershell
-python .\scripts\lite.py models --engine grok
-python .\scripts\lite.py set-default grok-4.7 --engine grok
-python .\scripts\lite.py --project 'C:\src\repo' resolve --engine grok
-python .\scripts\lite.py --project 'C:\src\repo' run --engine grok --brief 'C:\work\brief.txt' --explicit
+python .\scripts\worker.py models --engine grok
+python .\scripts\worker.py set-default grok-4.7 --engine grok
+python .\scripts\worker.py --project 'C:\src\repo' resolve --engine grok
+python .\scripts\worker.py --project 'C:\src\repo' run --engine grok --brief 'C:\work\brief.txt' --explicit
 ```
 
 `run --engine grok --model <id>`는 한 번만 모델을 바꾼다. 모델 선택 우선순위는
@@ -21,9 +21,9 @@ python .\scripts\lite.py --project 'C:\src\repo' run --engine grok --brief 'C:\w
 CLI 기본 모델을 쓰며, `run` 중에는 모델 목록을 재조회하지 않는다.
 
 ```powershell
-python .\scripts\lite.py --project 'C:\src\repo' set-project grok-4.7 --engine grok
-python .\scripts\lite.py --project 'C:\src\repo' set-project null --engine grok
-python .\scripts\lite.py set-default null --engine grok
+python .\scripts\worker.py --project 'C:\src\repo' set-project grok-4.7 --engine grok
+python .\scripts\worker.py --project 'C:\src\repo' set-project null --engine grok
+python .\scripts\worker.py set-default null --engine grok
 ```
 
 기존 `mode`와 프로젝트 잠금은 두 엔진이 공유한다. `off`면 Grok도 실행하지 않는다.
