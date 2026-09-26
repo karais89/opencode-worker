@@ -14,6 +14,8 @@ import platform_support
 
 MAX_LINE = 4 * 1024 * 1024
 MAX_ANSWER = 16 * 1024
+SHELL_TOOL_NAMES = {'run_terminal_command', 'run_terminal_cmd', 'bash', 'shell',
+                    'execute', 'run_command', 'terminal'}
 
 
 class Summary:
@@ -50,7 +52,11 @@ class Summary:
             self.malformed = True
             return False
         self.event_sequence += 1
-        if kind == 'thought':
+        if kind == 'plan' or kind.startswith('auto_compact_'):
+            pass  # Documented lifecycle activity; it is not completion evidence.
+        elif kind == 'max_turns_reached':
+            self.errors.append(kind)
+        elif kind == 'thought':
             if not isinstance(event.get('data'), str):
                 self.malformed = True
                 return False
@@ -90,7 +96,7 @@ class Summary:
                 self.malformed = True
                 return False
             self.tool_calls += 1
-            self.pending_tools[identity] = event.get('toolName')
+            self.pending_tools[identity] = dict(name=event.get('toolName'), kind=event.get('kind'))
             self.last_tool_sequence = self.event_sequence
         elif kind == 'tool_call_update':
             identity = event.get('toolCallId')
@@ -100,10 +106,10 @@ class Summary:
                 return False
             self.last_tool_sequence = self.event_sequence
             if status in ('completed', 'failed', 'cancelled', 'error'):
-                tool_name = self.pending_tools.pop(identity)
+                tool = self.pending_tools.pop(identity)
                 if status != 'completed':
                     self.tool_errors += 1
-                if tool_name == 'run_terminal_command':
+                if tool.get('kind') == 'execute' or tool.get('name') in SHELL_TOOL_NAMES:
                     output = event.get('rawOutput')
                     output = output if isinstance(output, dict) else {}
                     command = output.get('command')
@@ -176,7 +182,8 @@ def changed_since(before, after):
 def run(root, prompt, model=None, hard_timeout=None, inactivity_timeout=300,
         env=None, progress_stream=None):
     """Launch once. Only recognized Grok JSON events refresh inactivity."""
-    env = os.environ.copy() if env is None else env
+    env = (os.environ.copy() if env is None else env.copy())
+    env['GROK_MEMORY'] = '0'
     summary = Summary()
     process = reader = job = None
     launched = completed = False
@@ -259,8 +266,11 @@ def run(root, prompt, model=None, hard_timeout=None, inactivity_timeout=300,
                             discard = False
                 now = time.monotonic()
                 if progress_stream and now - last_progress >= 60:
-                    progress_stream.write(f'[grok-worker] running {int(now-started)}s | events={summary.events} | tools={summary.tool_calls}\n')
-                    progress_stream.flush()
+                    try:
+                        progress_stream.write(f'[grok-worker] running {int(now-started)}s | events={summary.events} | tools={summary.tool_calls}\n')
+                        progress_stream.flush()
+                    except (OSError, ValueError):
+                        pass
                     last_progress = now
             if buffer.strip() and not discard:
                 try:
