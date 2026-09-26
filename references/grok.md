@@ -36,7 +36,8 @@ python .\scripts\lite.py set-default null --engine grok
 `--permission-mode auto`, `--no-plan`, `--no-subagents`로 시작한다. 기본 ask 모드에서는
 헤드리스 편집 승인이 취소되므로 Grok의 auto 모드를 명시한다. 이 모드에서도 위험한 호출은
 승인을 요구하거나 거부될 수 있다. 사용자 Grok 설정, 훅, 플러그인과 deny 규칙은
-CLI가 그대로 적용한다. 실행기가 `--always-approve`를 추가하거나 거부를 우회하지 않는다.
+CLI가 그대로 적용한다. 단, Worker 세션 간 암묵적 컨텍스트 유입을 막기 위해 실행기는
+`GROK_MEMORY=0`을 강제하여 Grok의 cross-session memory를 비활성화한다. 실행기가 `--always-approve`를 추가하거나 거부를 우회하지 않는다.
 권한 거부와 provider 오류는 완료로 처리하지 않는다. OS 프로세스 수명 관리는 OpenCode와
 같은 플랫폼 도구를 사용하지만 보안 샌드박스를 제공하지 않는다.
 
@@ -46,14 +47,14 @@ Grok 최종 답변은 `status`, `changed`, `validation`, `risk`, 선택적인
 기존 작업 트리의 변경은 `preexisting_changes`로 따로 표시한다. 결과가 불완전하거나
 경로가 다르면 `needs_escalation`으로 반환하고 자동 재실행하지 않는다.
 
-Grok의 터미널 도구 이벤트에 명령과 종료 코드가 있으면 선언한 최종 로컬 검증 명령과
+Grok의 execute/터미널 도구 이벤트(`kind=execute` 또는 알려진 shell tool alias)에 명령과 종료 코드가 있으면 선언한 최종 로컬 검증 명령과
 대조한다. 누락되거나 이후 다른 도구가 실행된 경우에는 `unverified`로 둔다.
 `observed_pass`도 명령의 exit 0만 뜻하므로 Head는 필요한 수락 검사를 독립적으로 확인한다.
 `worker_tokens`, `worker_cost_usd`, `observed_model`은 Grok CLI가 보고한 값만
 사용하며, 보고되지 않으면 추측하지 않는다. 한 번의 세션에 여러 모델 요청과 도구 호출이
 있을 수 있다. 경과 시간은 런처의 관측값이며 과금 횟수와 다르다.
 
-유효한 Grok JSON 이벤트가 기본 300초간 없으면 중단한다. 반복되는 도구 목록,
+유효한 Grok JSON 이벤트가 기본 300초간 없으면 중단한다. 공식 `plan`/`auto_compact_*` lifecycle 이벤트는 정상 활동으로 허용하며, `max_turns_reached`는 완료를 막는 오류 증거로 기록한다. 반복되는 도구 목록,
 stderr 경고, 런처 heartbeat는 활동으로 세지 않는다. `--hard-timeout`은 별도의 선택적
 총 경과 시간 제한이다. 중단 뒤 부분 변경은 보존하고, 남은 프로세스 상태 확인 전
 재실행하지 않는다.
