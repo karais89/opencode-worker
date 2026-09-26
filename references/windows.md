@@ -19,7 +19,7 @@ PowerShell에서 다음 명령으로 **현재 실행 환경**을 확인한다. �
 python --version
 git --version
 Get-Command opencode -All
-python .\scripts\lite.py models
+python .\scripts\worker.py models
 ```
 
 `python`이 없다면 설치된 Python의 절대 경로나 `py -3`를 사용한다. `python3`라는 이름이나
@@ -37,7 +37,7 @@ CLI 자체의 아키텍처 선택·`OPENCODE_BIN_PATH` 처리 로직은 그대�
 
 ```powershell
 $env:OPENCODE_WORKER_BIN = 'C:\Tools\opencode.exe'
-python .\scripts\lite.py models
+python .\scripts\worker.py models
 ```
 
 환경변수 값에 `&`, 인자, 추가 따옴표를 넣어 명령 문자열을 만들지 않는다.
@@ -50,8 +50,8 @@ python .\scripts\lite.py models
 `provider/model`은 `models`에 나온 실제 식별자로 바꾼다. `--project`는 실제 저장소의 절대 경로다.
 
 ```powershell
-python .\scripts\lite.py set-default 'provider/model'
-python .\scripts\lite.py --project 'C:\src\my-project' resolve
+python .\scripts\worker.py set-default 'provider/model'
+python .\scripts\worker.py --project 'C:\src\my-project' resolve
 
 @'
 GOAL: 구현할 목표
@@ -60,7 +60,7 @@ CONSTRAINTS: 수정 범위와 제한
 DONE WHEN: 완료를 확인할 조건
 '@ | Set-Content -LiteralPath 'C:\work\task.txt' -Encoding UTF8
 
-python .\scripts\lite.py --project 'C:\src\my-project' run --brief 'C:\work\task.txt' --explicit
+python .\scripts\worker.py --project 'C:\src\my-project' run --brief 'C:\work\task.txt' --explicit
 ```
 
 예제의 `C:\work`는 먼저 존재해야 한다. Windows PowerShell 5.1의 기본 리다이렉션은 UTF-16 파일을
@@ -71,7 +71,7 @@ stdout 결과는 ASCII escape를 사용한 JSON이다. `\uXXXX` 형태의 한글
 
 기본 설정은 `%USERPROFILE%\.config\opencode-worker\config.json`이다. `XDG_CONFIG_HOME`이 있으면
 그 아래 `opencode-worker\config.json`을 쓴다. `--config`와 `OPENCODE_WORKER_CONFIG`도 그대로 동작한다.
-SDK 탐색은 [설정 안내](lite-v2.md)와 같으며, Windows 홈은 `USERPROFILE`을 우선한다.
+SDK 탐색은 [설정 안내](opencode.md)와 같으며, Windows 홈은 `USERPROFILE`을 우선한다.
 한글·공백이 있는 SDK/플러그인 경로는 `file:` URI로 변환한다.
 
 ## 잠금과 종료의 의미
