@@ -55,3 +55,5 @@ node --check assets/submit-result.mjs
 ```
 
 테스트는 가짜 CLI를 사용하고 유료 provider를 호출하지 않는다. CI는 Windows, macOS, Linux에서 Python 3.10/3.13을 검사한다. 실제 CLI·SDK·인증과 모델 응답의 품질은 별도 실사용 검증이 필요하다. 두 스킬의 프롬프트는 각각의 엔진을 명확히 선택하며 실패 시 자동으로 다른 엔진으로 바꾸지 않는다.
+
+실제 Grok CLI 비교의 진행 상태와 한도 때문에 남은 검증은 [벤치마크 기록](references/grok-benchmark-2026-09-26.md)에 적었다.

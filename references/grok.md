@@ -43,6 +43,8 @@ CLI가 그대로 적용한다. 단, Worker 세션 간 암묵적 컨텍스트 유
 `GROK_MEMORY=0`을 강제하여 Grok의 cross-session memory를 비활성화한다. 실행기가 `--always-approve`를 추가하거나 거부를 우회하지 않는다.
 권한 거부와 provider 오류는 완료로 처리하지 않는다. OS 프로세스 수명 관리는 OpenCode와
 같은 플랫폼 도구를 사용하지만 보안 샌드박스를 제공하지 않는다.
+CLI 오류 이벤트에서 사용량 한도를 확인하면 `needs_escalation`과 한도 안내를 반환한다.
+오류 원문은 결과에 복사하지 않으며, 부분 변경을 보존하고 자동 재실행하지 않는다.
 
 Grok 최종 답변은 `status`, `changed`, `validation`, `risk`, 선택적인
 `validation_commands`를 가진 JSON 객체여야 한다. 실행기는 기존 보고 형식을 검증하고,
