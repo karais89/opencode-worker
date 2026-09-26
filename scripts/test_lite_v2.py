@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lite
+import worker
 import streaming
 import submission
 from fixture_support import fake_cli
@@ -52,6 +53,9 @@ def summary(items):
 
 
 class LiteV2Tests(unittest.TestCase):
+    def test_worker_entrypoint_delegates_to_legacy_module(self):
+        self.assertIs(worker.main, lite.main)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
