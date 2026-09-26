@@ -139,6 +139,43 @@ class GrokWorkerTests(unittest.TestCase):
         self.assertFalse(summary.malformed)
         self.assertEqual(len(summary.pending_tools), 0)
 
+    def test_shell_alias_and_execute_kind_are_validation_evidence(self):
+        for tool_name, tool_kind in (('run_terminal_cmd', None), ('future_shell_name', 'execute')):
+            with self.subTest(tool_name=tool_name, tool_kind=tool_kind):
+                summary = grok_adapter.Summary()
+                call = {'type': 'tool_call', 'toolCallId': 'check',
+                        'toolName': tool_name}
+                if tool_kind:
+                    call['kind'] = tool_kind
+                summary.consume(call)
+                summary.consume({'type': 'tool_call_update', 'toolCallId': 'check',
+                                 'status': 'completed', 'rawOutput': {
+                                     'command': 'python -m unittest -v', 'exit_code': 0}})
+                self.assertEqual(summary.shell_commands[0]['exit'], 0)
+                self.assertFalse(summary.malformed)
+
+    def test_documented_lifecycle_events_are_not_malformed(self):
+        summary = grok_adapter.Summary()
+        for kind in ('plan', 'auto_compact_start', 'auto_compact_end'):
+            self.assertTrue(summary.consume({'type': kind}))
+        self.assertTrue(summary.consume({'type': 'max_turns_reached'}))
+        self.assertFalse(summary.malformed)
+        self.assertIn('max_turns_reached', summary.errors)
+
+    def test_worker_disables_cross_session_grok_memory(self):
+        body = ('import json, os\n'
+                'assert os.environ.get("GROK_MEMORY") == "0"\n'
+                'print(json.dumps({"type":"text","data":"{}"}), flush=True)\n'
+                'print(json.dumps({"type":"end","stopReason":"end_turn",'
+                '"sessionId":"fixture-session"}), flush=True)\n')
+        supplied = self.fake_cli(body)
+        supplied['GROK_MEMORY'] = '1'
+        with patch.dict(os.environ, supplied):
+            rc, summary = grok_adapter.run(str(self.root), 'task',
+                                           inactivity_timeout=2, progress_stream=False)
+        self.assertEqual(rc, 0)
+        self.assertTrue(summary.end_seen)
+
     def test_inventory_noise_does_not_keep_silent_worker_alive(self):
         body = ('import json,time\n'
                 'for _ in range(8):\n'
