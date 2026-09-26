@@ -1,4 +1,8 @@
-# Lite v2 설정과 한계
+# OpenCode Lite v2 설정과 한계
+
+이 문서는 기본 OpenCode 엔진의 세부 설정이다. Grok Build 엔진은 [Grok Build 안내](grok.md)를 본다.
+
+`<opencode-skill>`은 설치된 `opencode-worker` 디렉터리다. 소스 checkout에서는 저장소 루트를 사용한다.
 
 ## 목차
 환경 · 모델 설정 · 모드와 공유 스킬 · 결과 의미 · 타임아웃 정책 · 생략한 기능 · 검증
@@ -22,13 +26,15 @@ Windows에서 XDG 미지정 시 `%USERPROFILE%\.config\opencode-worker\config.js
 `--config` 또는 `OPENCODE_WORKER_CONFIG`로 대체 파일을 선택할 수 있다.
 기존 설정의 writer_default/default, projects, variants, aliases, mode, project_modes를 읽는다.
 알 수 없는 설정 필드는 보존하지만 fallback 등은 Lite 실행에서 사용하지 않는다.
+새 `grok` 객체의 default/projects는 Grok 모델 전용이며 OpenCode route와 분리된다.
+전역 mode/project_modes와 checkout 잠금은 두 엔진이 공유한다.
 
 ```sh
-python3 scripts/lite.py models
-python3 scripts/lite.py models <provider>
-python3 scripts/lite.py set-default <provider/model> --variant <supported-variant>
-python3 scripts/lite.py --project /absolute/repo set-project <provider/model> --variant <supported-variant>
-python3 scripts/lite.py --project /absolute/repo resolve
+python3 "<opencode-skill>/scripts/lite.py" models
+python3 "<opencode-skill>/scripts/lite.py" models <provider>
+python3 "<opencode-skill>/scripts/lite.py" set-default <provider/model> --variant <supported-variant>
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo set-project <provider/model> --variant <supported-variant>
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo resolve
 ```
 
 `models <provider>`는 사용 가능한 variant 이름도 출력한다. setter는 저장 전에 실제 모델 목록과
@@ -40,9 +46,9 @@ variant: 이번 --variant → 선택 모델의 저장 variants 항목. 프로젝
 같은 모델의 저장 variant는 프로젝트 간 공유되는 기존 형식이다. 다른 값은 --variant로 명시한다.
 
 ```sh
-python3 scripts/lite.py set-default <provider/model> --clear-variant
-python3 scripts/lite.py --project /absolute/repo set-project null
-python3 scripts/lite.py set-default null
+python3 "<opencode-skill>/scripts/lite.py" set-default <provider/model> --clear-variant
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo set-project null
+python3 "<opencode-skill>/scripts/lite.py" set-default null
 ```
 
 첫 명령은 해당 모델의 저장 variant를 지운다. null은 프로젝트 route 또는 전역 기본 route를 해제한다.
@@ -51,10 +57,10 @@ python3 scripts/lite.py set-default null
 ## 모드와 공유 스킬
 
 ```sh
-python3 scripts/lite.py set-mode off
-python3 scripts/lite.py set-mode auto
-python3 scripts/lite.py --project /absolute/repo set-mode manual --project-only
-python3 scripts/lite.py --project /absolute/repo set-mode inherit --project-only
+python3 "<opencode-skill>/scripts/lite.py" set-mode off
+python3 "<opencode-skill>/scripts/lite.py" set-mode auto
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo set-mode manual --project-only
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo set-mode inherit --project-only
 ```
 
 전역 `off`는 새 Worker 실행을 차단하며 프로젝트 `auto`로 되살아나지 않는다.
@@ -110,9 +116,9 @@ exit가 없으면 `unverified`이며, 이를 성공이나 실패로 추측하지
 CLI가 새로운 유형을 추가하면 완료 판정을 차단하므로, 해당 버전의 실제 이벤트를 검토하고 지원을 추가한다.
 
 ```sh
-python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt
-python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt --inactivity-timeout 300
-python3 scripts/lite.py --project /absolute/repo run --brief /absolute/task.txt --hard-timeout 7200
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo run --brief /absolute/task.txt
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo run --brief /absolute/task.txt --inactivity-timeout 300
+python3 "<opencode-skill>/scripts/lite.py" --project /absolute/repo run --brief /absolute/task.txt --hard-timeout 7200
 ```
 
 `--hard-timeout`은 명시적으로 지정할 때만 켜지는 선택적 총 경과 시간 상한이며 기본값은

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grok Build 작업 위임"
+  short_description: "Grok Build CLI 한 세션에 작업을 위임하고 결과를 확인합니다"
+  default_prompt: "$grok-worker로 이 저장소 작업을 Grok Build CLI 한 세션에 맡기고 결과와 미확인 사항을 점검해 주세요."
+policy:
+  allow_implicit_invocation: true

@@ -8,6 +8,7 @@ description: Codex/ChatGPT가 구현·다중 파일 수정·버그 수정·테�
 **Head의 계획 → 짧은 작업 지시 → Worker 한 세션 → 압축 결과 → Head의 판단**을 유지한다.
 `lite.py`는 설정·잠금·실행·결과 수집만 담당한다. 별도 Planner/Reviewer, 자동 모델 전환,
 재실행·수정 체인을 추가하지 않는다. 한 세션 안의 모델 요청과 도구 호출은 여러 번일 수 있다.
+두 엔진에 공통인 지시·완료·보고 기준은 [Worker 공통 계약](references/worker-contract.md)을 따른다.
 
 ## 1. 대상과 완료 조건 정하기
 
@@ -15,14 +16,7 @@ description: Codex/ChatGPT가 구현·다중 파일 수정·버그 수정·테�
 빈 폴더나 지시 파일만 있는 임시 폴더는 대상이 아니다. 기존 사용자 변경을 보존한다.
 Worker가 할 코드 탐색을 Head가 먼저 반복하지 말고, 이미 아는 정보로 지시 파일을 작성한다.
 
-```text
-GOAL: 달성할 목표
-PLAN: 이미 결정된 핵심 방향
-CONSTRAINTS: 작업 범위와 지켜야 할 제약
-DONE WHEN: 확인 가능한 완료 조건
-```
-
-지시는 자기완결적인 UTF-8 파일로 저장하고 **8 KiB 이하**로 유지한다.
+지시 파일 형식과 크기는 [Worker 공통 계약](references/worker-contract.md)을 따른다.
 대상이 불명확하면 임의 대체하지 말고 확인한다.
 
 ## 2. Worker 실행하기
@@ -67,14 +61,12 @@ python '<this-skill>\scripts\lite.py' --project 'C:\src\repo' run --brief 'C:\wo
 
 Worker는 최종 검증 뒤 `codex_worker_submit_result`로 제출한다. 제출 후 개발 도구를 호출하지 않는다.
 제출 형식 오류만 같은 세션에서 고친다. 마지막 자연어 답변을 완료 신호로 파싱하지 않는다.
-**최상위 `status`를 우선한다.** `needs_escalation`이면 안쪽 `result.status`가 `completed`여도 완료로 보고하지 않는다.
-오류·거부·비정상 종료·검증 실패를 숨기지 않고 부분 변경을 보존한다. 자동 재실행하지 않는다.
+완료 판정과 실패 후 처리는 [Worker 공통 계약](references/worker-contract.md)을 따른다.
 사용자가 후속 수정을 명시하면 새로운 작업으로 처리한다.
 
 ## 4. 결과를 필요한 만큼 확인하기
 
-요구사항을 `result.changed`, `validation`, `risk`와 대조한다. 전체 소스·diff·테스트를 습관적으로 반복하지 않는다.
-구체적 불일치, 검증 실패, 요구사항 누락, 고위험 변경이 있을 때만 해당 부분을 추가 확인한다.
+요구사항과 결과 대조는 [Worker 공통 계약](references/worker-contract.md)을 따른다. 전체 소스·diff·테스트를 습관적으로 반복하지 않는다.
 
 `validation_evidence.status=observed_pass`는 **선언한 명령의 exit 0을 관측했다**는 뜻이다.
 테스트 개수·품질·요구사항 충족·원격 완료까지 증명하지 않는다. `partial`·`unverified`를 실패로 단정하지 말고,
@@ -82,7 +74,7 @@ Worker는 최종 검증 뒤 `codex_worker_submit_result`로 제출한다. 제출
 
 ## 5. 사용자에게 보고하기
 
-**변경한 것 / 실제 검증한 것 / 남은 위험**을 짧게 보고한다. 진행 메시지나 도구 개수로 성공을 판정하지 않는다.
+공통 계약의 세 항목을 짧게 보고한다. 진행 메시지나 도구 개수로 성공을 판정하지 않는다.
 `model`·`variant`는 CLI 설정값이다. `observed_model`·`observed_variant`가 null이면 실제 모델을 독립 확인했다고 말하지 않는다.
 `session_id`는 과금 횟수가 아니다. 시간은 관측값만, 토큰은 provider 보고값과 누락 범위를 함께 제시한다.
 측정하지 않은 비용·토큰 절감률을 추측하지 않는다.

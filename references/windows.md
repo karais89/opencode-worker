@@ -1,5 +1,10 @@
 # Windows 네이티브 실행
 
+기본 OpenCode 엔진의 CLI/SDK 준비는 아래와 같다. Grok Build 엔진은
+[Grok Build 안내](grok.md)의 별도 `grok.exe` 및 인증을 사용하며, OpenCode SDK는 필요하지 않다.
+
+`<opencode-skill>`은 설치된 `opencode-worker` 디렉터리다. 소스 checkout에서는 저장소 루트를 사용한다.
+
 이 안내는 **Windows의 Python에서 직접 실행**하는 경우다. Worker 실행기에 WSL은 필요하지 않다.
 WSL에서 실행한다면 Linux용 명령과 해당 환경의 CLI·인증·SDK를 사용한다. 두 환경의 설치와 설정은 별개다.
 
@@ -16,7 +21,7 @@ PowerShell에서 다음 명령으로 **현재 실행 환경**을 확인한다. �
 python --version
 git --version
 Get-Command opencode -All
-python .\scripts\lite.py models
+python '<opencode-skill>\scripts\lite.py' models
 ```
 
 `python`이 없다면 설치된 Python의 절대 경로나 `py -3`를 사용한다. `python3`라는 이름이나
@@ -34,7 +39,7 @@ CLI 자체의 아키텍처 선택·`OPENCODE_BIN_PATH` 처리 로직은 그대�
 
 ```powershell
 $env:OPENCODE_WORKER_BIN = 'C:\Tools\opencode.exe'
-python .\scripts\lite.py models
+python '<opencode-skill>\scripts\lite.py' models
 ```
 
 환경변수 값에 `&`, 인자, 추가 따옴표를 넣어 명령 문자열을 만들지 않는다.
@@ -47,8 +52,8 @@ python .\scripts\lite.py models
 `provider/model`은 `models`에 나온 실제 식별자로 바꾼다. `--project`는 실제 저장소의 절대 경로다.
 
 ```powershell
-python .\scripts\lite.py set-default 'provider/model'
-python .\scripts\lite.py --project 'C:\src\my-project' resolve
+python '<opencode-skill>\scripts\lite.py' set-default 'provider/model'
+python '<opencode-skill>\scripts\lite.py' --project 'C:\src\my-project' resolve
 
 @'
 GOAL: 구현할 목표
@@ -57,7 +62,7 @@ CONSTRAINTS: 수정 범위와 제한
 DONE WHEN: 완료를 확인할 조건
 '@ | Set-Content -LiteralPath 'C:\work\task.txt' -Encoding UTF8
 
-python .\scripts\lite.py --project 'C:\src\my-project' run --brief 'C:\work\task.txt' --explicit
+python '<opencode-skill>\scripts\lite.py' --project 'C:\src\my-project' run --brief 'C:\work\task.txt' --explicit
 ```
 
 예제의 `C:\work`는 먼저 존재해야 한다. Windows PowerShell 5.1의 기본 리다이렉션은 UTF-16 파일을

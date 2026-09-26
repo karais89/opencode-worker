@@ -375,7 +375,10 @@ def run(args, cwd, timeout, prompt, env, replay_check, log_dir=None, progress_st
             try:
                 rc=p.wait(timeout=wait_timeout())
             except subprocess.TimeoutExpired as error:
-                error.timeout_kind=deadline_reached() or 'inactivity'
+                error.timeout_kind=(deadline_reached() or
+                    ('hard' if hard_deadline is not None and
+                     (active_deadline is None or hard_deadline<=active_deadline)
+                     else 'inactivity'))
                 raise
             completed=True
             summary._set_progress_phase('process_exited')
