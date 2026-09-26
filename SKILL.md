@@ -1,12 +1,12 @@
 ---
-name: opencode-worker
-description: Codex/ChatGPT가 구현·다중 파일 수정·버그 수정·테스트·디버깅을 OpenCode 또는 Grok Build CLI Worker 한 세션에 위임한다. 사용자가 $opencode-worker를 지정하거나 두 도구 중 하나에 작업을 맡기라고 명시한 경우 사용한다. 단순 질문, 설계만 필요한 요청, 아주 작은 편집, Worker 사용을 거부한 요청에는 사용하지 않는다.
+name: coding-worker
+description: Codex/ChatGPT가 구현·다중 파일 수정·버그 수정·테스트·디버깅을 OpenCode 또는 Grok Build CLI Worker 한 세션에 위임한다. 사용자가 $coding-worker를 지정하거나 Worker/외부 코딩 에이전트에 구현 작업을 맡기라고 명시한 경우 사용한다. OpenCode 또는 Grok Build를 직접 지정한 경우에도 사용한다. 단순 질문, 설계만 필요한 요청, 아주 작은 편집, Worker 사용을 거부한 요청에는 사용하지 않는다.
 ---
 
 # Coding Worker — OpenCode / Grok Build
 
 **Head의 계획 → 짧은 작업 지시 → 선택한 Worker 한 세션 → 압축 결과 → Head의 판단**을 유지한다.
-`lite.py`는 설정·잠금·실행·결과 수집만 담당한다. 별도 Planner/Reviewer, 자동 모델 전환,
+`worker.py`는 설정·잠금·실행·결과 수집만 담당한다. `lite.py`는 이전 사용자를 위한 호환 진입점이다. 별도 Planner/Reviewer, 자동 모델 전환,
 재실행·수정 체인을 추가하지 않는다. 한 세션 안의 모델 요청과 도구 호출은 여러 번일 수 있다.
 기본 엔진은 OpenCode다. 사용자가 Grok Build를 명시한 경우 `--engine grok`을 사용하고
 [Grok Build 안내](references/grok.md)를 읽는다. 한 엔진 실패를 다른 엔진으로 자동 재실행하지 않는다.
@@ -32,7 +32,7 @@ DONE WHEN: 확인 가능한 완료 조건
 아래 자리표시자를 실제 경로로 바꾼다. 명시적인 위임 요청에는 `--explicit`을 붙인다.
 
 ```sh
-python3 "<this-skill>/scripts/lite.py" --project "/absolute/repo" \
+python3 "<this-skill>/scripts/worker.py" --project "/absolute/repo" \
   run --brief "/absolute/brief.txt" --explicit
 ```
 
@@ -59,7 +59,7 @@ OpenCode의 `provider/model` 경로와 별도로 설정하며, 미설정 시 Gro
 | 외부 스킬 원문 | OpenCode에서 승인된 정확한 경로만 `--skill-dir`로 읽는다. 원본은 수정하지 않는다. |
 
 설정이 없으면 멈춘다. 정상 실행 중 모델 목록을 다시 조회하지 않는다.
-최초 설정이나 변경이 필요할 때만 [설정 안내](references/lite-v2.md)를 읽는다.
+최초 설정이나 변경이 필요할 때만 [설정 안내](references/opencode.md)를 읽는다.
 읽기 전용 모드에서는 shell·테스트·수정·임의 MCP를 실행하지 않고, `changed=[]`와 파일/줄 근거를 받는다.
 외부 스킬 경로에는 실제 `SKILL.md`가 있어야 하며 `*`, `?`를 넣지 않는다. 전역 스킬 목록을 스캔하지 않는다.
 일반 Worker의 프로젝트 도구·shell·테스트·빌드는 유지하되 권한 프로필을 OS 샌드박스로 믿지 않는다.
