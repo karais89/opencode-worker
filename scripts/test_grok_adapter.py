@@ -156,11 +156,24 @@ class GrokWorkerTests(unittest.TestCase):
 
     def test_documented_lifecycle_events_are_not_malformed(self):
         summary = grok_adapter.Summary()
-        for kind in ('plan', 'auto_compact_start', 'auto_compact_end'):
+        for kind in (
+                'plan', 'auto_compact_started', 'auto_compact_completed',
+                'auto_compact_failed', 'auto_compact_cancelled',
+                'auto_continue_completed', 'image_compressed',
+                'memory_flush_started', 'memory_flush_completed',
+                'memory_capture_activity'):
             self.assertTrue(summary.consume({'type': kind}))
         self.assertTrue(summary.consume({'type': 'max_turns_reached'}))
         self.assertFalse(summary.malformed)
         self.assertIn('max_turns_reached', summary.errors)
+
+    def test_event_after_end_is_malformed_even_for_inventory_noise(self):
+        summary = grok_adapter.Summary()
+        self.assertTrue(summary.consume({
+            'type': 'end', 'stopReason': 'end_turn', 'sessionId': 'session'}))
+        self.assertFalse(summary.consume({
+            'type': 'available_commands', 'tools': [], 'commands': []}))
+        self.assertTrue(summary.malformed)
 
     def test_worker_disables_cross_session_grok_memory(self):
         body = ('import json, os\n'
