@@ -141,27 +141,59 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
         try:
             if create_bundle:
                 os.replace(staged_bundle, bundle)
-                promoted.append(bundle)
             for name, target in destinations.items():
                 if present[name]:
-                    if name in unmanaged:
-                        backup_root = home / "worker-backups"
-                        backup_root.mkdir(exist_ok=True)
-                        backup = backup_root / (name + "-" + uuid.uuid4().hex)
-                    else:
-                        backup = staged / (name + "-previous")
-                    os.replace(target, backup)
+                    # Originals must outlive TemporaryDirectory cleanup, even
+                    # when an interrupt or filesystem error also breaks rollback.
+                    backup_root = home / "worker-backups"
+                    backup_root.mkdir(exist_ok=True)
+                    backup = backup_root / (name + "-" + uuid.uuid4().hex)
+                    # Journal before each rename: a signal can arrive after the
+                    # syscall has completed but before Python regains control.
                     backups[target] = backup
-                os.replace(staged_skills[name], target)
+                    os.replace(target, backup)
                 promoted.append(target)
-        except OSError:
+                os.replace(staged_skills[name], target)
+        except BaseException as error:
+            # Includes KeyboardInterrupt/SystemExit; successful rollback must
+            # re-raise the original exception, not report a successful install.
+            failures = []
             for target in reversed(promoted):
-                if target.is_dir():
-                    shutil.rmtree(target)
-            for target, backup in backups.items():
-                os.replace(backup, target)
+                try:
+                    if target.exists():
+                        shutil.rmtree(target)
+                except OSError as recovery_error:
+                    failures.append(str(target) + ": " + str(recovery_error))
+            for target, backup in reversed(tuple(backups.items())):
+                try:
+                    if backup.exists():
+                        os.replace(backup, target)
+                except OSError as recovery_error:
+                    failures.append(str(backup) + ": " + str(recovery_error))
+            # A surviving new entry may still reference this bundle. Never
+            # remove it after incomplete recovery, nor remove any old bundle.
+            if not failures and create_bundle:
+                try:
+                    if bundle.exists():
+                        shutil.rmtree(bundle)
+                except OSError as recovery_error:
+                    failures.append(str(bundle) + ": " + str(recovery_error))
+            if failures:
+                saved = [str(path) for path in backups.values() if path.exists()]
+                raise OSError("Installation rollback incomplete. Preserve recovery backups: "
+                              + (", ".join(saved) or "none remaining")
+                              + "; bundle: " + str(bundle)
+                              + "; errors: " + "; ".join(failures)) from error
             raise
-    saved = [path for path in backups.values() if path.parent == home / "worker-backups"]
+        # The transaction is committed. Managed backups are now expendable;
+        # failed cleanup leaves them available, never triggers a late rollback.
+        for target, backup in backups.items():
+            if target.name not in unmanaged:
+                try:
+                    shutil.rmtree(backup)
+                except OSError:
+                    pass
+    saved = [path for path in backups.values() if path.exists()]
     return ("설치 완료:\n" + "\n".join(str(path) for path in destinations.values())
             + "\n공유 번들:\n" + str(bundle)
             + ("\n이전 스킬 백업: " + ", ".join(map(str, saved)) if saved else ""))
