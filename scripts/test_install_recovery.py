@@ -4,8 +4,10 @@ import io
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -133,6 +135,62 @@ class InstallRecoveryTests(unittest.TestCase):
         self.assertEqual(self.tree_contents(target), originals)
         self.assertFalse((self.home / "worker-bundles" / install.VERSION).exists())
         self.assertFalse(list((self.home / "worker-backups").glob("*")))
+
+    def test_failed_bundle_promotion_does_not_remove_concurrent_destination(self):
+        home = self.home.resolve()
+        bundle = home / "worker-bundles" / install.VERSION
+        original_replace = os.replace
+
+        def collide(src, dst):
+            src, dst = Path(src), Path(dst)
+            if src.name == "bundle" and dst == bundle:
+                shutil.copytree(src, dst)
+                (dst / "CONCURRENT_INSTALL").write_text("keep", encoding="utf-8")
+                raise OSError("simulated concurrent installer won")
+            return original_replace(src, dst)
+
+        with patch.object(install.installer_v2.os, "replace", side_effect=collide):
+            with self.assertRaisesRegex(OSError, "concurrent installer won"):
+                self.install_quietly(home, skill="opencode-worker")
+        self.assertEqual((bundle / "CONCURRENT_INSTALL").read_text(encoding="utf-8"), "keep")
+        self.assertFalse((home / "skills/opencode-worker").exists())
+
+    def test_concurrent_install_is_rejected_before_writing_skills_or_bundle(self):
+        home = self.home.resolve()
+        ready, release = self.root / "lock-ready", self.root / "lock-release"
+        script = (
+            "import sys,time\n"
+            "from pathlib import Path\n"
+            "import installer_v2\n"
+            "home,ready,release=map(Path,sys.argv[1:])\n"
+            "home.mkdir(parents=True,exist_ok=True)\n"
+            "with installer_v2.install_lock(home):\n"
+            " ready.write_text('ready',encoding='utf-8')\n"
+            " while not release.exists(): time.sleep(0.01)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(home), str(ready), str(release)],
+            cwd=install.SOURCE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def stop_process():
+            release.touch(exist_ok=True)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+        self.addCleanup(stop_process)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists(), "lock holder exited or timed out: " + str(process.poll()))
+        with self.assertRaisesRegex(ValueError, "진행 중"):
+            self.install_quietly(home, skill="opencode-worker")
+        self.assertFalse((home / "skills").exists())
+        self.assertFalse((home / "worker-bundles").exists())
+        release.touch()
+        self.assertEqual(process.wait(timeout=5), 0)
 
 
 if __name__ == "__main__":

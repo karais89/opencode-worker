@@ -1,4 +1,5 @@
 """Transactional installation of independent skill entries over one immutable runtime."""
+import contextlib
 import hashlib
 import json
 import os
@@ -44,6 +45,33 @@ def check_layout(home):
             raise ValueError("스킬 경로가 심볼릭 링크입니다: " + str(path))
 
 
+@contextlib.contextmanager
+def install_lock(home):
+    """Fail closed when another installer owns this Codex home."""
+    path = home / ".worker-install.lock"
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("설치 잠금 경로가 일반 파일이 아닙니다: " + str(path))
+    with path.open("a+b") as handle:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise ValueError("다른 Worker 설치가 진행 중입니다: " + str(home)) from error
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def managed(path, bundles):
     if not path.is_dir() or not (path / "BUNDLE_VERSION").is_file():
         return False
@@ -76,8 +104,8 @@ def stage_skill(staged, source, name, version, skill_version, shim):
     return target
 
 
-def install(home, source, version, shim, replace=False, skill="all", dry_run=False,
-            migrate_unmanaged=False):
+def _install(home, source, version, shim, replace=False, skill="all", dry_run=False,
+             migrate_unmanaged=False):
     if not version_ok(version):
         raise ValueError("번들 버전이 올바르지 않습니다.")
     if skill not in (*NAMES, "all"):
@@ -87,7 +115,6 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
     if (not isinstance(versions, dict) or set(versions) != set(NAMES)
             or not all(version_ok(value) for value in versions.values())):
         raise ValueError("스킬 버전 파일이 올바르지 않습니다.")
-    home = home.expanduser().resolve()
     check_layout(home)
     skills, bundles = home / "skills", home / "worker-bundles"
     bundle = bundles / version
@@ -138,8 +165,10 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
         staged_skills = {name: stage_skill(staged, source, name, version, versions[name], shim)
                          for name in selected}
         backups, promoted = {}, []
+        bundle_promotion = None
         try:
             if create_bundle:
+                bundle_promotion = (staged_bundle, bundle)
                 os.replace(staged_bundle, bundle)
             for name, target in destinations.items():
                 if present[name]:
@@ -152,15 +181,19 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
                     # syscall has completed but before Python regains control.
                     backups[target] = backup
                     os.replace(target, backup)
-                promoted.append(target)
-                os.replace(staged_skills[name], target)
+                source_skill = staged_skills[name]
+                promoted.append((source_skill, target))
+                os.replace(source_skill, target)
         except BaseException as error:
             # Includes KeyboardInterrupt/SystemExit; successful rollback must
             # re-raise the original exception, not report a successful install.
             failures = []
-            for target in reversed(promoted):
+            for source_skill, target in reversed(promoted):
                 try:
-                    if target.exists():
+                    # os.replace removes the staged source only when promotion
+                    # succeeded. If it still exists, the destination belongs to
+                    # another process and must never be removed by this rollback.
+                    if not source_skill.exists() and target.exists():
                         shutil.rmtree(target)
                 except OSError as recovery_error:
                     failures.append(str(target) + ": " + str(recovery_error))
@@ -172,10 +205,11 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
                     failures.append(str(backup) + ": " + str(recovery_error))
             # A surviving new entry may still reference this bundle. Never
             # remove it after incomplete recovery, nor remove any old bundle.
-            if not failures and create_bundle:
+            if not failures and bundle_promotion is not None:
                 try:
-                    if bundle.exists():
-                        shutil.rmtree(bundle)
+                    source_bundle, target_bundle = bundle_promotion
+                    if not source_bundle.exists() and target_bundle.exists():
+                        shutil.rmtree(target_bundle)
                 except OSError as recovery_error:
                     failures.append(str(bundle) + ": " + str(recovery_error))
             if failures:
@@ -197,3 +231,13 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
     return ("설치 완료:\n" + "\n".join(str(path) for path in destinations.values())
             + "\n공유 번들:\n" + str(bundle)
             + ("\n이전 스킬 백업: " + ", ".join(map(str, saved)) if saved else ""))
+
+
+def install(home, source, version, shim, replace=False, skill="all", dry_run=False,
+            migrate_unmanaged=False):
+    home = home.expanduser().resolve()
+    if dry_run:
+        return _install(home, source, version, shim, replace, skill, True, migrate_unmanaged)
+    home.mkdir(parents=True, exist_ok=True)
+    with install_lock(home):
+        return _install(home, source, version, shim, replace, skill, False, migrate_unmanaged)
