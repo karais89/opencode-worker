@@ -242,7 +242,9 @@ class InstallTests(unittest.TestCase):
 
         def fail_promote(source, target):
             nonlocal failed
-            if not failed and Path(target) == old and Path(source).name == "opencode-worker":
+            if (not failed and Path(target).name == "opencode-worker"
+                    and Path(source).name == "opencode-worker"
+                    and Path(source).parent.name.startswith("worker-install-")):
                 failed = True
                 raise OSError("fixture promotion failure")
             return original(source, target)
