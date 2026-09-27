@@ -69,7 +69,10 @@ def stage_skill(staged, source, name, version, skill_version, shim):
     shutil.copy2(origin / "agents" / "openai.yaml", target / "agents" / "openai.yaml")
     (target / "BUNDLE_VERSION").write_text(version + "\n", encoding="utf-8")
     (target / "SKILL_VERSION").write_text(skill_version + "\n", encoding="utf-8")
-    (target / "scripts" / "lite.py").write_text(shim, encoding="utf-8")
+    # The engine is an installed literal, not an overridable environment default.
+    engine = "grok" if name == "grok-worker" else "opencode"
+    bound_shim = shim.replace("__WORKER_ENGINE__", repr(engine))
+    (target / "scripts" / "lite.py").write_text(bound_shim, encoding="utf-8")
     return target
 
 
@@ -94,8 +97,8 @@ def install(home, source, version, shim, replace=False, skill="all", dry_run=Fal
                  if present[name] and not managed(path, bundles)}
     if unmanaged and not migrate_unmanaged:
         raise ValueError("관리 대상이 아닌 스킬입니다. --migrate-unmanaged로 백업 후 이전하세요: " + ", ".join(sorted(unmanaged)))
-    if any(present.values()) and not (replace or migrate_unmanaged):
-        raise ValueError("설치 대상이 이미 있습니다. 교체하려면 --replace를 사용하세요.")
+    if any(present[name] and name not in unmanaged for name in selected) and not replace:
+        raise ValueError("관리 중인 스킬을 갱신하려면 --replace를 사용하세요.")
     for name, path in destinations.items():
         if present[name] and name not in unmanaged:
             old_bundle = (path / "BUNDLE_VERSION").read_text(encoding="utf-8").strip()

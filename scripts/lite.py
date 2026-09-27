@@ -508,27 +508,33 @@ def update_config(args, path, root):
                 route_source=source, model=model, mode=mode_for(data, root))
 
 
-def parser():
+def parser(bound_engine=None):
+    """A skill pins its engine; the source CLI keeps both engine choices."""
+    if bound_engine is not None and bound_engine not in ("opencode", "grok"):
+        raise ValueError("Invalid bound Worker engine.")
+    engines = (bound_engine,) if bound_engine is not None else ("opencode", "grok")
+    default_engine = bound_engine if bound_engine is not None else "opencode"
     p = argparse.ArgumentParser(description="OpenCode or Grok Build Worker")
     p.add_argument("--project")
     p.add_argument("--config")
     sub = p.add_subparsers(dest="action", required=True)
     models = sub.add_parser("models")
     models.add_argument("provider", nargs="?")
-    models.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
+    models.add_argument("--engine", choices=engines, default=default_engine)
     resolve = sub.add_parser("resolve")
-    resolve.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
+    resolve.add_argument("--engine", choices=engines, default=default_engine)
     for name in ("set-default", "set-project"):
         setter = sub.add_parser(name); setter.add_argument("model")
-        setter.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
+        setter.add_argument("--engine", choices=engines, default=default_engine)
         choice = setter.add_mutually_exclusive_group()
         choice.add_argument("--variant"); choice.add_argument("--clear-variant", action="store_true")
     mode = sub.add_parser("set-mode")
+    mode.set_defaults(engine=default_engine)
     mode.add_argument("mode", choices=("auto", "manual", "off", "inherit"))
     mode.add_argument("--project-only", action="store_true")
     run = sub.add_parser("run")
     run.add_argument("--brief", required=True)
-    run.add_argument("--engine", choices=("opencode", "grok"), default="opencode")
+    run.add_argument("--engine", choices=engines, default=default_engine)
     run.add_argument("--model"); run.add_argument("--variant")
     run.add_argument("--explicit", action="store_true")
     run.add_argument("--read-only", action="store_true")
@@ -544,8 +550,8 @@ def parser():
     return p
 
 
-def main(argv=None):
-    args = parser().parse_args(argv)
+def main(argv=None, *, bound_engine=None):
+    args = parser(bound_engine).parse_args(argv)
     try:
         if not args.project and (args.action in ("run", "resolve", "set-project") or getattr(args, "project_only", False)):
             raise Failure("project_required", "Head must supply --project explicitly.")

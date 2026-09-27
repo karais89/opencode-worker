@@ -3,23 +3,40 @@
 This is not a test-output parser or an implementation reviewer. A successful
 process exit cannot prove pass counts, test quality, or remote job completion.
 """
-from pathlib import PurePath
 import re
 import shlex
 
 
+SHELL_NAMES = frozenset(('sh', 'bash', 'zsh', 'dash', 'fish', 'eval',
+                         'cmd', 'powershell', 'pwsh'))
+SHELL_WRAPPERS = SHELL_NAMES | {name + '.exe' for name in SHELL_NAMES} | {'cmd.com'}
+
+
 def direct_command(command):
     """Conservatively exclude compound shells; false negatives stay unverified."""
-    if re.search(r'[\n\r;&|<>`]|\$\(', command):
+    if not isinstance(command, str) or re.search(r'[\n\r;&|<>`]|\$\(', command):
         return False
     try:
         words = shlex.split(command)
+        # POSIX shlex consumes unquoted backslashes in Windows paths. Inspect
+        # a second tokenization with literal backslashes on every host so the
+        # same recorded Windows command is classified identically on POSIX.
+        literal = shlex.shlex(command, posix=True)
+        literal.whitespace_split = True
+        literal.commenters = ''
+        literal.escape = ''
+        literal_words = list(literal)
     except ValueError:
         return False
-    if not words:
+    if not words or not literal_words:
         return False
-    # A shell wrapper can conceal a compound command even without metacharacters.
-    return PurePath(words[0]).name not in ('sh', 'bash', 'zsh', 'dash', 'fish', 'eval')
+    for executable in (words[0], literal_words[0]):
+        name = executable.replace('\\', '/').rsplit('/', 1)[-1].casefold()
+        if (name in SHELL_WRAPPERS or name.endswith(('.bat', '.cmd', '.ps1'))
+                or any(char in executable for char in ('$', '%', '!', '^'))):
+            return False
+    # This is a conservative evidence classifier, not a command sandbox.
+    return True
 
 
 def harmless_observation(command):

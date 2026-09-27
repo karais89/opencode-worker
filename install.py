@@ -10,7 +10,7 @@ import sys
 SOURCE = Path(__file__).resolve().parent
 VERSION = (SOURCE / "VERSION").read_text(encoding="utf-8").strip()
 SHIM = '''#!/usr/bin/env python3
-"""Launch the shared Worker bundle installed with this skill."""
+"""Launch the shared Worker bundle with this skill's fixed engine."""
 from pathlib import Path
 import runpy
 import sys
@@ -21,7 +21,8 @@ runner = skill.parent.parent / "worker-bundles" / version / "scripts" / "lite.py
 if not runner.is_file():
     raise SystemExit("Worker bundle missing: " + str(runner))
 sys.path.insert(0, str(runner.parent))
-runpy.run_path(str(runner), run_name="__main__")
+runtime = runpy.run_path(str(runner), run_name="worker_runtime")
+raise SystemExit(runtime["main"](bound_engine=__WORKER_ENGINE__))
 '''
 
 
@@ -45,7 +46,7 @@ def main() -> int:
                         help="설치할 스킬 (기본값: 둘 다)")
     parser.add_argument("--replace", action="store_true", help="관리 중인 스킬 갱신")
     parser.add_argument("--migrate-unmanaged", action="store_true",
-                        help="기존 비관리 스킬을 영구 백업하고 이전")
+                        help="기존 비관리 스킬만 영구 백업하고 이전 (관리 스킬 갱신에는 --replace 필요)")
     parser.add_argument("--dry-run", action="store_true", help="파일 변경 없이 설치 계획 확인")
     args = parser.parse_args()
     try:
