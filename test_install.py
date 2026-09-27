@@ -1,4 +1,5 @@
 """Installed entrypoints use one bundle and preserve the existing CLI contract."""
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,13 @@ import install
 
 
 class InstallTests(unittest.TestCase):
+    def test_installer_notice_survives_legacy_windows_encoding(self):
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252")
+        install.write_notice("설치 완료: C:\\repo", stream)
+        stream.flush()
+        self.assertIn(b"C:\\repo", buffer.getvalue())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -183,7 +191,8 @@ class InstallTests(unittest.TestCase):
 
         def fail_once(source, target):
             nonlocal failed
-            if not failed and Path(target) == self.home / "skills" / "grok-worker" and Path(source).name == "grok-worker":
+            if (not failed and Path(target) == self.home.resolve() / "skills" / "grok-worker"
+                    and Path(source).name == "grok-worker"):
                 failed = True
                 raise OSError("fixture promotion failure")
             return original(source, target)

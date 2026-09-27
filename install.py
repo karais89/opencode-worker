@@ -27,6 +27,12 @@ runpy.run_path(str(runner), run_name="__main__")
 '''
 
 
+def write_notice(message: str, stream=None) -> None:
+    stream = sys.stdout if stream is None else stream
+    encoding = stream.encoding or "utf-8"
+    stream.write(message.encode(encoding, errors="replace").decode(encoding) + "\n")
+
+
 def install(home: Path, replace: bool = False) -> None:
     home = home.expanduser().resolve()
     skills = home / "skills"
@@ -106,7 +112,8 @@ def install(home: Path, replace: bool = False) -> None:
             for target, backup in backups.items():
                 os.replace(backup, target)
             raise
-    print("설치 완료:", *(str(path) for path in destinations), "공유 번들:", bundle, sep="\n")
+    write_notice("\n".join(["설치 완료:", *(str(path) for path in destinations),
+                            "공유 번들:", str(bundle)]))
 
 
 def main() -> int:
@@ -118,7 +125,7 @@ def main() -> int:
     try:
         install(args.home, args.replace)
     except (OSError, ValueError) as error:
-        print("설치 실패:", error, file=sys.stderr)
+        write_notice("설치 실패: " + str(error), sys.stderr)
         return 1
     return 0
 
