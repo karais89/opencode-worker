@@ -127,6 +127,17 @@ class PlatformTests(unittest.TestCase):
                 {'OPENCODE_WORKER_BIN': str(shim), 'PATH': ''})
         self.assertEqual(cmd, ['node.exe', str(launcher.resolve()), '--dir', 'repo & literal%PATH%!^'])
 
+    def test_current_npm_native_exe_is_invoked_without_cmd(self):
+        shim = self.root / 'opencode.cmd'
+        shim.write_text('@exit /b 99\n')
+        native = self.root / 'node_modules/opencode-ai/bin/opencode.exe'
+        native.parent.mkdir(parents=True)
+        native.write_bytes(b'fixture')
+        args = ['run', '--dir', 'repo & literal%PATH%!^']
+        with patch.object(host, 'WINDOWS', True):
+            self.assertEqual(host.opencode_command(args, {'OPENCODE_WORKER_BIN': str(shim)}),
+                             [str(native.resolve()), *args])
+
     def test_project_local_npm_launcher_is_resolved(self):
         shim = self.root / 'node_modules/.bin/opencode.cmd'
         shim.parent.mkdir(parents=True)

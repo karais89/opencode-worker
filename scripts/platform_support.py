@@ -63,14 +63,19 @@ def opencode_command(args, env=None):
         return [sys.executable, str(Path(executable).resolve()), *args]
     if not WINDOWS or suffix in ('.exe', '.com'):
         return [executable, *args]
-    # Global npm and project-local node_modules/.bin installations. Invoke the
-    # installed JS launcher so its own architecture/OPENCODE_BIN_PATH logic stays
-    # authoritative. Do not choose an arbitrary platform binary ourselves.
+    # Global npm and project-local node_modules/.bin installations. Recent npm
+    # packages ship a native exe; older packages ship a JS launcher. Resolve
+    # only the known package entrypoints and never execute the shell wrapper.
     parent = Path(executable).resolve().parent
-    candidates = [parent / 'node_modules/opencode-ai/bin/opencode']
+    package_bins = [parent / 'node_modules/opencode-ai/bin']
     if parent.name == '.bin':
-        candidates.append(parent.parent / 'opencode-ai/bin/opencode')
-    launcher = next((p for p in candidates if p.is_file()), None)
+        package_bins.append(parent.parent / 'opencode-ai/bin')
+    native = next((directory / 'opencode.exe' for directory in package_bins
+                   if (directory / 'opencode.exe').is_file()), None)
+    if native is not None:
+        return [str(native.resolve()), *args]
+    launcher = next((directory / 'opencode' for directory in package_bins
+                     if (directory / 'opencode').is_file()), None)
     if launcher is not None:
         node = shutil.which('node.exe', path=env.get('PATH', os.defpath))
         if not node:

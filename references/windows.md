@@ -30,8 +30,9 @@ Unix shebang 실행을 전제로 하지 않는다. 필요한 프로그램이 없
 ## CLI 선택
 
 기본적으로 PATH의 OpenCode를 찾는다. `opencode.exe`는 인자 배열로 직접 실행한다.
-표준 npm 설치의 `opencode.cmd`는 shell로 실행하지 않고, 인접한
-`node_modules/opencode-ai/bin/opencode`를 `node.exe`로 실행한다.
+표준 npm 설치의 `opencode.cmd`는 shell로 실행하지 않는다. 인접한
+`node_modules/opencode-ai/bin/opencode.exe`가 있으면 직접 실행하고,
+이전 배포의 `node_modules/opencode-ai/bin/opencode`는 `node.exe`로 실행한다.
 프로젝트의 `node_modules/.bin` 설치도 같은 패키지의 진입점을 찾는다.
 CLI 자체의 아키텍처 선택·`OPENCODE_BIN_PATH` 처리 로직은 그대로 유지한다.
 
