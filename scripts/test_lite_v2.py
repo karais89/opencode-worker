@@ -52,6 +52,18 @@ def summary(items):
 
 
 class LiteV2Tests(unittest.TestCase):
+    def test_changed_paths_must_match_git_delta(self):
+        before = {'preexisting.txt': 'old'}
+        after = {'preexisting.txt': 'old', 'main.py': 'new'}
+        matched = lite.result_from_summary(0, summary(events()), 'provider/default', None,
+                                           'global', 0.1, before=before, after=after)
+        self.assertEqual(matched['status'], 'completed')
+        self.assertEqual(matched['observed_changed'], ['main.py'])
+        self.assertEqual(matched['preexisting_changes'], ['preexisting.txt'])
+        mismatch = lite.result_from_summary(0, summary(events()), 'provider/default', None,
+                                            'global', 0.1, before=before, after=before)
+        self.assertEqual(mismatch['status'], 'needs_escalation')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

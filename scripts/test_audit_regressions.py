@@ -256,6 +256,11 @@ class AuditRegressions(unittest.TestCase):
     def test_javascript_and_python_submission_contract_agree(self):
         good = report()
         values = [good, {**good, "changed": [], "risk": "\uac80\uc99d\uc644\ub8cc"},
+                  {**good, "changed": ["src/tags.py"]},
+                  {**good, "changed": ["tags.py: normalized values"]},
+                  {**good, "changed": ["../tags.py"]},
+                  {**good, "changed": ["C:\\tags.py"]},
+                  {**good, "changed": ["tags.py", "tags.py"]},
                   {**good, "validation": []}, {**good, "risk": ""},
                   {**good, "risk": "x" * 1801}, {**good, "status": "other"},
                   {**good, "validation_commands": ["test"] * 2},

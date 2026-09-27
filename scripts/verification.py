@@ -22,6 +22,15 @@ def direct_command(command):
     return PurePath(words[0]).name not in ('sh', 'bash', 'zsh', 'dash', 'fish', 'eval')
 
 
+def harmless_observation(command):
+    """Only these exact Git reads can follow a final check without staling it."""
+    return command.strip() in {
+        'git status --short', 'git status --porcelain',
+        'git diff --check', 'git diff --name-only',
+        'git diff HEAD --name-only',
+    }
+
+
 def assess(report, attempt):
     """Check only the commands explicitly declared by the worker, never prose.
 
@@ -42,7 +51,11 @@ def assess(report, attempt):
         barrier = None
     for record in records:
         sequence = record.get('sequence')
-        if (record.get('command') not in declared or record.get('command_truncated')):
+        if ((record.get('command') not in declared or record.get('command_truncated'))
+                and not (not record.get('command_truncated')
+                         and harmless_observation(record.get('command', ''))
+                         and record.get('tool_status') == 'completed'
+                         and record.get('exit') == 0)):
             if barrier is not None and type(sequence) is int:
                 barrier = max(barrier, sequence)
     for command in declared:

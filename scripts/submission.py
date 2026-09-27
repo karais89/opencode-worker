@@ -8,6 +8,14 @@ TOOL = 'codex_worker_submit_result'
 LIMIT = 1800
 
 
+def exact_relative_path(value):
+    return (isinstance(value, str) and bool(value) and value == value.strip()
+            and len(value) <= 512 and not value.startswith('/')
+            and ':' not in value and '\\' not in value
+            and all(part not in ('', '.', '..') for part in value.split('/'))
+            and all(ord(char) >= 32 and ord(char) != 127 for char in value))
+
+
 def validate(report):
     if not isinstance(report, dict):
         raise ValueError('report must be an object')
@@ -19,6 +27,9 @@ def validate(report):
             raise ValueError(field + ' must contain nonempty strings')
         if field == 'validation' and not value:
             raise ValueError('validation must contain at least one actual result or blocker')
+    if (any(not exact_relative_path(path) for path in report['changed'])
+            or len(set(report['changed'])) != len(report['changed'])):
+        raise ValueError('changed must contain unique exact repository-relative paths without explanations')
     if not isinstance(report.get('risk'), str) or not report['risk'].strip():
         raise ValueError('risk must be a nonempty string')
     result = {key: report[key] for key in ('status', 'changed', 'validation', 'risk')}

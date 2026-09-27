@@ -38,7 +38,7 @@ class InstallTests(unittest.TestCase):
         source = self.root / "next-source"
         shutil.copytree(install.SOURCE, source,
                         ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
-        (source / "VERSION").write_text("2.2.0\n", encoding="utf-8")
+        (source / "VERSION").write_text("2.3.0\n", encoding="utf-8")
         return source
 
     def test_two_skills_share_one_bundle_and_cli_resolves_both_engines(self):
@@ -122,8 +122,10 @@ class InstallTests(unittest.TestCase):
                 "reasoning": 0, "total": 2, "cache": {"read": 0, "write": 0}}}},
         ]
         fake = self.root / "opencode-fake.py"
-        fake.write_text("import json,sys\nassert sys.argv[1]=='run'\n"
+        fake.write_text("import json,sys,pathlib\nassert sys.argv[1]=='run'\n"
                         "assert '-m' in sys.argv and sys.argv[sys.argv.index('-m')+1]=='provider/open'\n"
+                        "root=pathlib.Path(sys.argv[sys.argv.index('--dir')+1])\n"
+                        "(root/'answer.txt').write_text('done\\n')\n"
                         "sys.stdin.read()\nfor event in " + repr(events) + ": print(json.dumps(event),flush=True)\n",
                         encoding="utf-8")
         sdk = self.root / "sdk" / "node_modules/@opencode-ai/plugin/dist/tool.js"
@@ -145,40 +147,36 @@ class InstallTests(unittest.TestCase):
     def test_upgrade_moves_both_skills_to_new_bundle_and_keeps_old_bundle(self):
         install.install(self.home)
         source = self.next_source()
-        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.2.0"):
+        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.3.0"):
             install.install(self.home, replace=True)
         for name in ("opencode-worker", "grok-worker"):
             skill = self.home / "skills" / name
-            self.assertEqual((skill / "BUNDLE_VERSION").read_text(encoding="utf-8").strip(), "2.2.0")
-            self.assertIn("worker-bundles/2.2.0/references/worker-contract.md",
+            self.assertEqual((skill / "BUNDLE_VERSION").read_text(encoding="utf-8").strip(), "2.3.0")
+            self.assertIn("worker-bundles/2.3.0/references/worker-contract.md",
                           (skill / "SKILL.md").read_text(encoding="utf-8"))
         self.assertTrue((self.home / "worker-bundles" / install.VERSION / "scripts" / "lite.py").is_file())
-        self.assertTrue((self.home / "worker-bundles" / "2.2.0" / "scripts" / "lite.py").is_file())
+        self.assertTrue((self.home / "worker-bundles" / "2.3.0" / "scripts" / "lite.py").is_file())
 
-    def test_mixed_versions_and_missing_bundle_block_upgrade(self):
+    def test_missing_bundle_blocks_upgrade(self):
         install.install(self.home)
         old_version = install.VERSION
         grok = self.home / "skills" / "grok-worker"
-        (grok / "BUNDLE_VERSION").write_text("other\n", encoding="utf-8")
         source = self.next_source()
-        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.2.0"):
-            with self.assertRaisesRegex(ValueError, "버전이 다릅니다"):
-                install.install(self.home, replace=True)
-            (grok / "BUNDLE_VERSION").write_text(old_version + "\n", encoding="utf-8")
+        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.3.0"):
             (self.home / "worker-bundles" / old_version / "VERSION").unlink()
             with self.assertRaisesRegex(ValueError, "공유 번들"):
                 install.install(self.home, replace=True)
-        self.assertFalse((self.home / "worker-bundles" / "2.2.0").exists())
+        self.assertFalse((self.home / "worker-bundles" / "2.3.0").exists())
 
     def test_same_version_and_partial_install_block_replace(self):
         install.install(self.home)
         opencode = self.home / "skills" / "opencode-worker"
         original = (opencode / "SKILL.md").read_bytes()
-        with self.assertRaisesRegex(ValueError, "같은 버전은 덮어쓰지 않습니다"):
+        with self.assertRaisesRegex(ValueError, "같은 스킬·번들 버전은 덮어쓰지 않습니다"):
             install.install(self.home, replace=True)
         self.assertEqual((opencode / "SKILL.md").read_bytes(), original)
         shutil.rmtree(self.home / "skills" / "grok-worker")
-        with self.assertRaisesRegex(ValueError, "하나만 있습니다"):
+        with self.assertRaisesRegex(ValueError, "같은 스킬·번들 버전은 덮어쓰지 않습니다"):
             install.install(self.home, replace=True)
         self.assertEqual((opencode / "SKILL.md").read_bytes(), original)
 
@@ -198,7 +196,7 @@ class InstallTests(unittest.TestCase):
             return original(source, target)
 
         source = self.next_source()
-        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.2.0"):
+        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.3.0"):
             with patch.object(install.os, "replace", side_effect=fail_once):
                 with self.assertRaises(OSError):
                     install.install(self.home, replace=True)
@@ -206,6 +204,59 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((opencode / "SKILL.md").read_bytes(), old)
         self.assertTrue((self.home / "skills" / "grok-worker" / "SKILL.md").is_file())
         self.assertTrue((self.home / "worker-bundles" / install.VERSION / "scripts" / "lite.py").is_file())
+
+    def test_one_skill_upgrades_while_other_keeps_old_bundle(self):
+        install.install(self.home)
+        source = self.next_source()
+        (source / "skill-versions.json").write_text(
+            json.dumps({"opencode-worker": "1.1.0", "grok-worker": "1.0.0"}), encoding="utf-8")
+        with patch.object(install, "SOURCE", source), patch.object(install, "VERSION", "2.3.0"):
+            install.install(self.home, replace=True, skill="opencode-worker")
+        opencode = self.home / "skills" / "opencode-worker"
+        grok = self.home / "skills" / "grok-worker"
+        self.assertEqual((opencode / "BUNDLE_VERSION").read_text().strip(), "2.3.0")
+        self.assertEqual((opencode / "SKILL_VERSION").read_text().strip(), "1.1.0")
+        self.assertEqual((grok / "BUNDLE_VERSION").read_text().strip(), install.VERSION)
+        self.assertTrue((self.home / "worker-bundles" / install.VERSION).is_dir())
+
+    def test_same_bundle_version_with_different_contents_is_rejected(self):
+        install.install(self.home, skill="opencode-worker")
+        source = self.next_source()
+        (source / "VERSION").write_text(install.VERSION + "\n", encoding="utf-8")
+        with (source / "scripts" / "lite.py").open("a", encoding="utf-8") as handle:
+            handle.write("\n# changed runtime fixture\n")
+        with patch.object(install, "SOURCE", source):
+            with self.assertRaisesRegex(ValueError, "내용이 다릅니다"):
+                install.install(self.home, skill="grok-worker")
+        self.assertFalse((self.home / "skills" / "grok-worker").exists())
+
+    def test_unmanaged_migration_dry_run_backup_and_rollback(self):
+        old = self.home / "skills" / "opencode-worker"
+        old.mkdir(parents=True)
+        (old / "note.txt").write_text("keep", encoding="utf-8")
+        install.install(self.home, skill="opencode-worker", dry_run=True, migrate_unmanaged=True)
+        self.assertEqual((old / "note.txt").read_text(), "keep")
+        self.assertFalse((self.home / "worker-bundles").exists())
+        original = os.replace
+        failed = False
+
+        def fail_promote(source, target):
+            nonlocal failed
+            if not failed and Path(target) == old and Path(source).name == "opencode-worker":
+                failed = True
+                raise OSError("fixture promotion failure")
+            return original(source, target)
+
+        with patch.object(install.installer_v2.os, "replace", side_effect=fail_promote):
+            with self.assertRaises(OSError):
+                install.install(self.home, skill="opencode-worker", migrate_unmanaged=True)
+        self.assertTrue(failed)
+        self.assertEqual((old / "note.txt").read_text(), "keep")
+        install.install(self.home, skill="opencode-worker", migrate_unmanaged=True)
+        saved = list((self.home / "worker-backups").iterdir())
+        self.assertEqual(len(saved), 1)
+        self.assertEqual((saved[0] / "note.txt").read_text(), "keep")
+        self.assertTrue((old / "SKILL.md").is_file())
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import time
 
 import platform_support
 import grok_adapter
+import git_evidence
 import streaming
 import submission
 import verification
@@ -167,6 +168,7 @@ def worker_env(read_only=False, skill_dirs=()):
         "Do not search for another project, access secrets, modify global settings, push/deploy/publish, "
         "commit without task intent, launch subagents, or bypass denials via other tools. "
         "Submit actual changes, checks and risk using codex_worker_submit_result after final validation. "
+        "changed must contain only exact repository-relative file paths, without descriptions. "
         "If submission is rejected, correct only the report in this same session."
     )
     permission = profile["permission"]
@@ -220,10 +222,12 @@ def make_prompt(root, brief, read_only=False, skill_dirs=()):
     return (f"PROJECT\n{root}\n\n{brief}\n\n{mode}{context}\n"
             "Do not expand scope or add workers. Submit the final result after the last tool call. "
             "Declare exact final local validation_commands when available, [] for remote checks. "
+            "List only exact repository-relative file paths in changed, without descriptions. "
             "Do not rerun checks solely to satisfy evidence formatting; report uncertainty honestly.")
 
 
-def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=False):
+def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=False,
+                        before=None, after=None):
     public = summary.public()
     capture = public.get("result_submission", {})
     report = capture.get("report")
@@ -240,6 +244,10 @@ def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=
         problem = "Read-only report or observed tools violate the requested scope."
     elif evidence["status"] == "failed":
         problem = "A declared final validation command was observed failing."
+    observed_changed = git_evidence.changed_since(before, after) if before is not None and after is not None else None
+    if (not problem and report and observed_changed is not None
+            and sorted(report["changed"]) != observed_changed):
+        problem = "Reported changed paths differ from the observed Git working-tree delta."
     return {"status": "needs_escalation" if problem else report["status"],
             "worker_used": bool(public.get("session_id")), "worker_process_started": True,
             "session_id": public.get("session_id"), "engine": "opencode",
@@ -247,6 +255,8 @@ def result_from_summary(rc, summary, model, variant, source, elapsed, read_only=
             "model_source": "selected_cli_arguments", "observed_model": None,
             "observed_variant": None, "route_source": source, "read_only": read_only,
             "elapsed_seconds": round(elapsed, 2), "result": report, "validation_evidence": evidence,
+            "observed_changed": observed_changed,
+            "preexisting_changes": sorted(before) if before is not None else None,
             "worker_tokens": public.get("worker_tokens"), "tools": public.get("tools", {}),
             **({"message": problem} if problem else {})}
 
@@ -356,6 +366,10 @@ def run_worker(args, data, root, cfg_path):
     if engine == "grok":
         return run_grok_worker(args, data, root, cfg_path, brief)
     with checkout_lock(root, cfg_path):
+        try:
+            before = git_evidence.git_snapshot(root)
+        except ValueError:
+            before = None
         env = worker_env(readonly, skill_dirs)
         cmd = ["run", "--format", "json", "--agent", "codex-worker", "--dir", root, "-m", model]
         if variant:
@@ -369,7 +383,8 @@ def run_worker(args, data, root, cfg_path):
             summary = getattr(error, "worker_summary", None)
             kind = getattr(error, "timeout_kind", None)
             result = result_from_summary(-1, summary, model, variant, source,
-                                         time.monotonic() - started, readonly) if summary else {}
+                                         time.monotonic() - started, readonly, before,
+                                         git_evidence.git_snapshot(root) if before is not None else None) if summary else {}
             if kind == "inactivity":
                 reason = (f"Worker interrupted after {args.inactivity_timeout:g}s with no OpenCode JSON/event activity "
                           "(inactivity timeout).")
@@ -384,7 +399,9 @@ def run_worker(args, data, root, cfg_path):
                                            "This is not a provider error. No automatic retry.")
             result.setdefault("worker_used", False)
             return result
-        return result_from_summary(rc, summary, model, variant, source, time.monotonic() - started, readonly)
+        after = git_evidence.git_snapshot(root) if before is not None else None
+        return result_from_summary(rc, summary, model, variant, source,
+                                   time.monotonic() - started, readonly, before, after)
 
 
 def model_inventory(root, provider=None):

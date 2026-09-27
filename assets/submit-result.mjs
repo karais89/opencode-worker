@@ -6,7 +6,7 @@ export default async function () {
   return {
     tool: {
       codex_worker_submit_result: tool({
-        description: 'Submit the final result after all development and validation. Invalid arguments return an error: correct only the report and call again in this same session. After acceptance, finish without other tool calls.',
+        description: 'Submit the final result after all development and validation. changed must list exact repository-relative paths only. Invalid arguments return an error: correct only the report and call again in this same session. After acceptance, finish without other tool calls.',
         args: {
           status: tool.schema.enum(['completed', 'needs_escalation']),
           changed: tool.schema.array(tool.schema.string()),
@@ -22,6 +22,13 @@ export default async function () {
             }
           }
           if (!args.validation.length) throw new Error('validation requires actual results or a blocker');
+          const exactPath = x => typeof x === 'string' && x.length > 0 && Array.from(x).length <= 512 &&
+            x === x.trim() && !x.startsWith('/') && !x.includes(':') && !x.includes('\\') &&
+            !/[\u0000-\u001f\u007f]/.test(x) &&
+            x.split('/').every(part => part && part !== '.' && part !== '..');
+          if (args.changed.some(x => !exactPath(x)) || new Set(args.changed).size !== args.changed.length) {
+            throw new Error('changed requires unique exact repository-relative paths without explanations');
+          }
           if (typeof args.risk !== 'string' || !args.risk.trim()) throw new Error('risk is required; use none if no known risk');
           const report = { status: args.status, changed: args.changed, validation: args.validation, risk: args.risk };
           if (args.validation_commands !== undefined) {
